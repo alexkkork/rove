@@ -1730,12 +1730,14 @@ fn animation_content_reference(ctx: &WorldRef, animation: &str) -> mlua::Result<
     if let Ok(value) = world::get_property(ctx, animation, "AnimationId") {
         if let Some(text) = value
             .as_str()
-            .filter(|value| !value.is_empty() && value.len() <= 512)
+            .filter(|value| value.len() <= 512)
         {
             return Ok(text.to_owned());
         }
     }
-    Err(err("Animation has no supported content reference"))
+    // An Animation with no asset still loads as an empty track in the engine
+    // (Animate sets up all of its slots that way before ids replicate).
+    Ok(String::new())
 }
 
 fn animator_load(
@@ -1785,7 +1787,9 @@ fn animator_load(
         return Err(err("animation track limit exceeded"));
     }
     let clip = store.animation_clips.get(&reference).cloned();
-    request_animation(&mut store, ctx, &reference)?;
+    if !reference.is_empty() {
+        request_animation(&mut store, ctx, &reference)?;
+    }
     let track_id = format!("local-track-{}", store.tracks.len() + 1);
     let state = Rc::new(RefCell::new(TrackState {
         id: track_id,

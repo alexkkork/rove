@@ -286,15 +286,14 @@ fn animation_load_uses_received_content_when_legacy_id_is_empty() {
 }
 
 #[test]
-fn animation_load_rejects_when_both_legacy_and_received_content_are_empty() {
+fn animation_load_accepts_an_empty_reference_as_an_empty_track() {
     let (lua, ctx) = animation_content_test_world("", "");
-    let message: String = lua
-        .load(
-            "local ok,err=pcall(function() animator:LoadAnimation(workspace.IncomingAnimation) end);assert(not ok);return tostring(err)",
-        )
+    let reference: String = lua
+        .load("return animator:LoadAnimation(workspace.IncomingAnimation).Animation.AnimationId")
         .eval()
         .unwrap();
-    assert!(message.contains("Animation has no supported content reference"));
+    assert_eq!(reference, "");
+    // An empty reference needs no asset request.
     assert!(ctx.borrow().effects.get("animation_requests").is_none());
 }
 
