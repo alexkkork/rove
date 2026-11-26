@@ -289,13 +289,7 @@ fn decode_packet_mode(
             }
             // Live record bodies may end with zero pad bytes; anything else
             // left over means the field parse drifted.
-            let leftover = body.remaining();
-            if leftover > 0 && !unknown_tail {
-                let tail = body.take(leftover)?;
-                if tail.iter().any(|byte| *byte != 0) {
-                    eprintln!("ISR-LEFTOVER {:02x?}", tail);
-                }
-            }
+
             // Unknown bits inside the body cannot be sized; drop their
             // fields and resync to the record body end so later records
             // still parse.

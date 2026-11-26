@@ -11,6 +11,10 @@ const MAX_DATAGRAM: usize = 1100;
 pub(crate) fn record(schema: &Schema, view: &WorldView, frame: &PartFrame) -> Result<Vec<u8>, &'static str> {
     let id = format!("{}:{}", frame.id >> 32, frame.id as u32);
     let name = view.class_name(&id).ok_or("isr-part-unavailable")?;
+    if std::env::var_os("ROVE_ISR_SEND_TRACE").is_some() {
+        eprintln!("ISR-SEND part={} name={} scope_owner={:?}", id, name,
+            view.get_property(&id, "NetworkOwnerV3"));
+    }
     let class_index = schema.classes.iter().position(|class| class.name == name).ok_or("isr-class-unavailable")?;
     let class = &schema.classes[class_index];
     if class.id != class_index || class_index > u16::MAX as usize || class.isr_properties.is_empty()
