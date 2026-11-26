@@ -93,7 +93,7 @@ impl Runtime {
         animation_backend: Arc<dyn AnimationBackend>,
         world: Option<&SharedProjectedWorldView>,
     ) -> Result<Self, String> {
-        if !(8..=512).contains(&memory) {
+        if !(8..=1536).contains(&memory) {
             return Err("Lua memory limit must be 8..512 MiB".into());
         }
         let text_measurements = crate::engine_text_measure::Context::new(text_backend.clone());

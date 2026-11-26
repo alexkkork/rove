@@ -130,8 +130,8 @@ fn parse(args: &[String]) -> Result<Command, String> {
                     value
                         .parse::<u32>()
                         .ok()
-                        .filter(|v| (8..=512).contains(v))
-                        .ok_or("Lua memory limit must be 8..512 MiB")?,
+                        .filter(|v| (8..=1536).contains(v))
+                        .ok_or("Lua memory limit must be 8..1536 MiB")?,
                 );
             }
             _ => return Err("unknown command or option".into()),
@@ -227,7 +227,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 .map(|path| {
                     crate::live_runtime::RuntimeConfig::from_file(
                         path,
-                        lua_memory_mib.unwrap_or(32),
+                        lua_memory_mib.unwrap_or(1536),
                     )
                 })
                 .transpose()?;
@@ -413,7 +413,7 @@ fn transport_probe_succeeded(probe: &Value) -> bool {
 }
 
 fn usage() -> String {
-    "usage: rove auth [--credential-file FILE] | rove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 32]]]".into()
+    "usage: rove auth [--credential-file FILE] | rove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 1536]]]".into()
 }
 
 #[cfg(test)]
@@ -595,7 +595,7 @@ mod tests {
                 "--script",
                 "source.luau",
                 "--lua-memory-mib",
-                "513",
+                "1537",
             ],
         ] {
             let mut args = vec!["join", "--place-id", "4"];

@@ -1,0 +1,10 @@
+local m = game:GetService("ReplicatedStorage").BrickBattle.Attributes
+print("A", typeof(m.setAttribute), typeof(m.getAttribute))
+local p = workspace:FindFirstChildWhichIsA("Part")
+print("B", tostring(p))
+local r1 = table.pack(pcall(m.setAttribute, p, "N", 5))
+print("C", tostring(r1[1]), tostring(r1[2]))
+local r2 = table.pack(pcall(function() return m.setAttribute(p, "N2", 5) end))
+print("D", tostring(r2[1]), tostring(r2[2]))
+local r3 = table.pack(pcall(function() return p:SetAttribute("N3", 5) end))
+print("E", tostring(r3[1]), tostring(r3[2]))

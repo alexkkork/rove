@@ -230,7 +230,9 @@ fn completed_received_creations_use_catalog_defaults_but_partial_and_explicit_va
     assert_eq!(world::get_property(&eager, "complete_bool", "Value").unwrap(), json!(false));
     assert_eq!(world::get_property(&eager, "complete_image", "Active").unwrap(), json!(false));
     assert_eq!(world::get_property(&eager, "explicit_bool", "Value").unwrap(), json!(true));
-    assert!(world::get_property(&eager, "partial_bool", "Value").is_err());
+    // Value holders resolve their typed empty `Value` even on partial
+    // creates; a partial Game has to answer `nil.X` reads.
+    assert_eq!(world::get_property(&eager, "partial_bool", "Value").unwrap(), json!(false));
 
     // The shared projected path resolves the same catalog defaults lazily and
     // preserves the same explicit-value and incomplete-record rules.
@@ -253,5 +255,5 @@ fn completed_received_creations_use_catalog_defaults_but_partial_and_explicit_va
     assert_eq!(world::get_property(&projected, "complete_bool", "Value").unwrap(), json!(false));
     assert_eq!(world::get_property(&projected, "complete_image", "Active").unwrap(), json!(false));
     assert_eq!(world::get_property(&projected, "explicit_bool", "Value").unwrap(), json!(true));
-    assert!(world::get_property(&projected, "partial_bool", "Value").is_err());
+    assert_eq!(world::get_property(&projected, "partial_bool", "Value").unwrap(), json!(false));
 }

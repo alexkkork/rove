@@ -42,7 +42,7 @@ use std::{
 
 const SNAPSHOT_LIMIT: usize = 8 * 1024 * 1024;
 const SOURCE_LIMIT: usize = 100 * 1024 * 1024;
-const USAGE: &str = "rove run --snapshot FILE --script FILE [--deltas JSONL] [--lua-memory-mib 512] [--timeout-seconds 60] [--hold-ms 0] [--json]\nrove replay --packets FILE --script FILE [--json]\nrove replay-stream --packets FILE --script FILE [--packet-interval-ms 0] [--json]\nrove repl --snapshot FILE [--lua-memory-mib 512]\nrove console --snapshot FILE --socket PATH --lease-root PATH [--lua-memory-mib 512]\nrove serve --snapshot FILE [--port 5467] [--socket PATH --lease-root PATH] [--ui-root PATH] [--content-root PATH] [--script FILE] [--serve-seconds 0]\nrove submit --socket PATH --script FILE\nrove status --socket PATH --job-id ID\nrove leave --socket PATH\nrove snapshot --snapshot FILE [--deltas JSONL]\nrove auth [--credential-file FILE]\nrove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 512]]]\nSession mode owns live reception in Rust; --script runs authored Luau against ordered received updates. The selected engine host embeds the official Luau VM; --physics enables own-character gravity and movement.\n--lightweight omits received visual/audio asset properties (reads report unavailable) and uses a 1 MiB cold-property cache backed by a private temporary file; physics and gameplay state remain.\nLocal VM modes accept --content-root PATH for font files (otherwise ROBLOX_CONTENT_DIR or the installed Roblox content directory).\nThe Lua memory limit is an allocator cap, not a total-process RAM cap.";
+const USAGE: &str = "rove run --snapshot FILE --script FILE [--deltas JSONL] [--lua-memory-mib 1536] [--timeout-seconds 60] [--hold-ms 0] [--json]\nrove replay --packets FILE --script FILE [--json]\nrove replay-stream --packets FILE --script FILE [--packet-interval-ms 0] [--json]\nrove repl --snapshot FILE [--lua-memory-mib 1536]\nrove console --snapshot FILE --socket PATH --lease-root PATH [--lua-memory-mib 1536]\nrove serve --snapshot FILE [--port 5467] [--socket PATH --lease-root PATH] [--ui-root PATH] [--content-root PATH] [--script FILE] [--serve-seconds 0]\nrove submit --socket PATH --script FILE\nrove status --socket PATH --job-id ID\nrove leave --socket PATH\nrove snapshot --snapshot FILE [--deltas JSONL]\nrove auth [--credential-file FILE]\nrove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 1536]]]\nSession mode owns live reception in Rust; --script runs authored Luau against ordered received updates. The selected engine host embeds the official Luau VM; --physics enables own-character gravity and movement.\n--lightweight omits received visual/audio asset properties (reads report unavailable) and uses a 1 MiB cold-property cache backed by a private temporary file; physics and gameplay state remain.\nLocal VM modes accept --content-root PATH for font files (otherwise ROBLOX_CONTENT_DIR or the installed Roblox content directory).\nThe Lua memory limit is an allocator cap, not a total-process RAM cap.";
 
 // json! borrows its inputs, so an existing Value or String gets cloned.
 // move the big inputs in ourselves so we do not keep two copies.
@@ -106,7 +106,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         deltas: None,
         socket: None,
         lease_root: None,
-        memory: 512,
+        memory: 1536,
         timeout: 60,
         hold_ms: 0,
         packet_interval_ms: 0,
@@ -172,7 +172,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "replay reads its world from --packets, without a snapshot or delta input".into(),
         );
     }
-    if !(8..=512).contains(&options.memory) {
+    if !(8..=1536).contains(&options.memory) {
         return Err("Lua memory limit must be 8..512 MiB".into());
     }
     if options.hold_ms > 60_000 {

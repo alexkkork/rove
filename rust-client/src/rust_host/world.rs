@@ -2423,7 +2423,10 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
                 return Ok(value);
             }
         }
-        if let Some(value) = client_omitted_default(&node.class_name, key) {
+        // The projected (live replication) path always knows the node's
+        // class, so value-holder defaults are safe even for partial creates;
+        // a reader that indexes `.X` must never see nil.
+        if let Some(value) = client_omitted_default(&node.class_name, key, true, false) {
             return Ok(value);
         }
         if world.lightweight_assets && super::world_aliases::is_lightweight_asset(key) {
@@ -2464,7 +2467,9 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
             return Ok(default);
         }
     }
-    if let Some(default) = client_omitted_default(&node.class_name, key) {
+    if let Some(default) =
+        client_omitted_default(&node.class_name, key, node.received_creation_complete, !node.server_owned)
+    {
         return Ok(default);
     }
     Err(mlua::Error::RuntimeError(format!(
@@ -2474,7 +2479,14 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
 }
 
 /// Engine defaults for client-side properties that replication omits.
-fn client_omitted_default(class: &str, key: &str) -> Option<Json> {
+fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -> Option<Json> {
+    // Local value holders (`$AttributeFoo` children) always need their typed
+    // empty `Value`; replicated ones only once the creation completes, so a
+    // partial capture still reports the property as unknown.
+    // Value holders always answer their typed empty `Value`.
+    if let Some(default) = value_object_default(class, key) {
+        return Some(default);
+    }
     // InputBinding is client-built by PlayerModule; replicated copies omit
     // most defaults (scale vectors, thresholds, enum directions).
     if class == "InputBinding" {
@@ -2536,6 +2548,30 @@ fn client_omitted_default(class: &str, key: &str) -> Option<Json> {
         return gui_base_default(key);
     }
     None
+}
+
+/// Empty `Value` for each replicable value-holder class.
+fn value_object_default(class: &str, key: &str) -> Option<Json> {
+    if key != "Value" {
+        return None;
+    }
+    let value = match class {
+        "NumberValue" | "IntValue" | "FloatValue" | "DoubleConstrainedValue"
+        | "IntConstrainedValue" => json!(0),
+        "StringValue" => json!(""),
+        "BoolValue" => json!(false),
+        "Vector3Value" => json!({"$vector3":[0,0,0]}),
+        "Vector2Value" => json!({"$vector2":[0,0]}),
+        "Color3Value" => json!({"$color3":[0,0,0]}),
+        "CFrameValue" => {
+            json!({"$cframe":{"position":[0,0,0],"rotation":[1,0,0,0,1,0,0,0,1]}})
+        }
+        "BrickColorValue" => json!({"$brickcolor":194}),
+        "RayValue" => json!({"$ray":[{"$vector3":[0,0,0]},{"$vector3":[0,0,-1]}]}),
+        "ObjectValue" => Json::Null,
+        _ => return None,
+    };
+    Some(value)
 }
 
 /// Client-owned `InputBinding` defaults that replication omits.

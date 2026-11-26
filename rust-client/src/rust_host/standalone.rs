@@ -154,7 +154,7 @@ fn run_inner(
     if source.len() > MAX_SOURCE {
         return encode(failure("input exceeds 100 MiB limit", false));
     }
-    if !(1..=2000).contains(&timeout_ms) || !(8..=512).contains(&memory_mb) {
+    if !(1..=2000).contains(&timeout_ms) || !(8..=1536).contains(&memory_mb) {
         return encode(failure("invalid source or resource limit", false));
     }
     if arguments.len() > 64 || arguments.iter().any(|v| !v.is_finite()) {

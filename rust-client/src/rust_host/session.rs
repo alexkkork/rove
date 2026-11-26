@@ -197,7 +197,7 @@ impl Vm {
         shared: Option<&SharedProjectedWorldView>,
     ) -> Result<Self, String> {
         rove_runtime_sys::verify_abi()?;
-        if !(8..=512).contains(&memory) {
+        if !(8..=1536).contains(&memory) {
             return Err("Lua memory limit must be 8..512 MiB".into());
         }
         if !snapshot.is_object()

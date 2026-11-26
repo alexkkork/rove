@@ -53,7 +53,7 @@ impl RuntimeConfig {
         }
     }
     pub fn from_file(path: &Path, memory: u32) -> Result<Self, String> {
-        if !(8..=512).contains(&memory) {
+        if !(8..=1536).contains(&memory) {
             return Err("Lua memory limit must be 8..512 MiB".into());
         }
         let file = File::open(path).map_err(|_| "script file unavailable")?;
@@ -72,7 +72,7 @@ impl RuntimeConfig {
         Ok(Self { source, memory, pinned_session_code: false, animation_backend: None, dashboard: None })
     }
     pub fn interactive(memory: u32, dashboard: crate::dashboard::DashboardControl) -> Result<Self, String> {
-        if !(8..=512).contains(&memory) { return Err("Lua memory limit must be 8..512 MiB".into()); }
+        if !(8..=1536).contains(&memory) { return Err("Lua memory limit must be 8..512 MiB".into()); }
         Ok(Self { source: String::new(), memory, pinned_session_code: false, animation_backend: None, dashboard: Some(dashboard) })
     }
     pub fn with_animation_backend(mut self, backend: Arc<dyn crate::animation_assets::AnimationBackend>) -> Self {
