@@ -2480,6 +2480,28 @@ fn client_omitted_default(class: &str, key: &str) -> Option<Json> {
     if class == "InputBinding" {
         return input_binding_default(key);
     }
+    if class == "DataModel" {
+        return match key {
+            "CreatorType" => Some(json!({"$enum":{"type":"CreatorType","name":"User","value":0}})),
+            "CreatorId" => Some(json!(0)),
+            "Genre" => Some(json!({"$enum":{"type":"Genre","name":"All","value":1}})),
+            _ => None,
+        };
+    }
+    if class == "Terrain" {
+        return match key {
+            "Size" => Some(json!({"$vector3":[2048, 512, 2048]})),
+            "Position" => Some(json!({"$vector3":[0, 0, 0]})),
+            "CFrame" => Some(json!({"$cframe":{"position":[0,0,0],"rotation":[1,0,0,0,1,0,0,0,1]}})),
+            "PivotOffset" => Some(json!({"$cframe":{"position":[0,0,0],"rotation":[1,0,0,0,1,0,0,0,1]}})),
+            "WaterColor" => Some(json!({"$color3":[0.12,0.5,0.9]})),
+            "WaterWaveSize" | "WaterWaveSpeed" => Some(json!(0)),
+            "WaterTransparency" => Some(json!(0.1)),
+            "Decoration" => Some(json!(true)),
+            "MaxExtents" => Some(json!({"$vector3":[2048,512,2048]})),
+            _ => None,
+        };
+    }
     if class == "InputAction" {
         return match key {
             "Enabled" | "Editor" => Some(json!(true)),

@@ -431,6 +431,27 @@ impl UserData for CFrameValue {
             require_rotation(c)?;
             Ok(native([-c.rotation[2], -c.rotation[5], -c.rotation[8]]))
         });
+        // Lowercase aliases used by builtin camera scripts.
+        for (name, axis) in [
+            ("xVector", 0usize),
+            ("rightVector", 0),
+            ("yVector", 1),
+            ("upVector", 1),
+            ("zVector", 2),
+        ] {
+            f.add_field_method_get(name, move |_, c| {
+                require_rotation(c)?;
+                Ok(native([
+                    c.rotation[axis],
+                    c.rotation[3 + axis],
+                    c.rotation[6 + axis],
+                ]))
+            });
+        }
+        f.add_field_method_get("lookVector", |_, c| {
+            require_rotation(c)?;
+            Ok(native([-c.rotation[2], -c.rotation[5], -c.rotation[8]]))
+        });
     }
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         m.add_meta_method(MetaMethod::ToString, |_, c, ()| {

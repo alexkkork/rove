@@ -486,3 +486,42 @@ fn mesh_vertices_follow_local_part_pose_and_size_edits() {
     let points = super::mesh_world_points(&world, "mesh", &[json!([1, 0, 0])]).unwrap();
     assert_eq!(points, vec![[12.0, 0.0, 0.0]]);
 }
+
+#[test]
+fn legacy_ray_apis_return_hit_part_position_and_normal() -> mlua::Result<()> {
+    let lua = mlua::Lua::new();
+    let snapshot = json!({"version":1,"sequence":0,"services":{"Workspace":"ws"},"nodes":[
+        {"id":"game","class_name":"DataModel","name":"game"},
+        {"id":"ws","class_name":"Workspace","name":"Workspace","parent":"game","properties":{},"server_owned":true},
+        {"id":"floor","class_name":"Part","name":"Floor","parent":"ws","properties":{
+            "CFrame":{"$cframe":{"position":[0,0,0],"rotation":[1,0,0,0,1,0,0,0,1]}},
+            "Size":{"$vector3":[100,1,100]},"Material":{"$enum":{"type":"Material","name":"Plastic","value":256}}},"server_owned":true}
+    ]});
+    let world: WorldRef = Rc::new(RefCell::new(World::from_snapshot(&snapshot, None).unwrap()));
+    super::super::install_bindings(&lua, &world)?;
+    lua.globals().set("ws", super::world::instance(&lua, &world, "ws")?)?;
+    let (part, pos, normal): (mlua::Value, mlua::Value, mlua::Value) = lua
+        .load(
+            r#"
+            local ray = Ray.new(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0))
+            return ws:FindPartOnRay(ray)
+        "#,
+        )
+        .eval()?;
+    let mlua::Value::UserData(part) = part else {
+        panic!("expected a hit part");
+    };
+    assert_eq!(
+        super::world::instance_id(&mlua::Value::UserData(part)).unwrap(),
+        "floor"
+    );
+    let mlua::Value::Vector(pos) = pos else {
+        panic!("expected a hit position");
+    };
+    assert!((pos.y() - 0.5).abs() < 1e-3, "{pos:?}");
+    let mlua::Value::Vector(normal) = normal else {
+        panic!("expected a hit normal");
+    };
+    assert!((normal.y() - 1.0).abs() < 1e-3, "{normal:?}");
+    Ok(())
+}

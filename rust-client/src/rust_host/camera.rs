@@ -129,13 +129,20 @@ fn camera(ctx: &WorldRef, id: &str) -> mlua::Result<()> {
     }
     Ok(())
 }
+/// A headless session has no window manager, so no display update ever
+/// arrives. Fall back to the same 1920x1080 surface the GUI layer uses, or
+/// every ray/frustum calculation runs against a 1x1 viewport.
 fn surface(ctx: &WorldRef, id: &str) -> Surface {
     ctx.borrow()
         .camera_state
         .surfaces
         .get(id)
         .copied()
-        .unwrap_or_default()
+        .unwrap_or(Surface {
+            size: [1920., 1080.],
+            device: [0.; 4],
+            core: [0.; 4],
+        })
 }
 fn scalar(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<f64> {
     world::get_property(ctx, id, key)?

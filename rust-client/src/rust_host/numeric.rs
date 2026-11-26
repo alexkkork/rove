@@ -58,7 +58,11 @@ impl UserData for Vector2 {
         f.add_meta_field("__type", "Vector2");
         f.add_field_method_get("X", |_, v| Ok(v.x));
         f.add_field_method_get("Y", |_, v| Ok(v.y));
+        // Lowercase aliases used by builtin camera scripts.
+        f.add_field_method_get("x", |_, v| Ok(v.x));
+        f.add_field_method_get("y", |_, v| Ok(v.y));
         f.add_field_method_get("Magnitude", |_, v| Ok(v.magnitude()));
+        f.add_field_method_get("magnitude", |_, v| Ok(v.magnitude()));
         f.add_field_method_get("Unit", |lua, v| {
             let m = v.magnitude();
             lua.create_userdata(if m == 0.0 {

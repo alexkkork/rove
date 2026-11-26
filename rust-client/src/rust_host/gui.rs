@@ -1871,6 +1871,18 @@ fn gui_service_property(
         return Ok(None);
     }
     let value = match key {
+        // Headless desktop topbar has no inset; PlayerModule reads the Rect.
+        "TopbarInset" => json!({"$rect":[{"$vector2":[0,0]},{"$vector2":[0,0]}]}),
+        "ViewportSizeInMM" => json!({"$vector2":[0,0]}),
+        "PreferredTextSize" => json!({"$enum":{"type":"PreferredTextSize","name":"Medium","value":1}}),
+        "DisplayScalingMode" => {
+            json!({"$enum":{"type":"DisplayScalingMode","name":"Default","value":0}})
+        }
+        "ViewportDisplaySize" => {
+            json!({"$enum":{"type":"DisplaySize","name":"Medium","value":1}})
+        }
+        "PreferredTransparency" => json!(0),
+        "IsModalDialog" | "IsWindows" => Json::Bool(false),
         "TouchControlsEnabled" => Json::Bool(false),
         "AutoSelectGuiEnabled" | "GuiNavigationEnabled" => Json::Bool(false),
         "ReducedMotionEnabled" => Json::Bool(false),
@@ -1879,6 +1891,60 @@ fn gui_service_property(
         _ => return Ok(None),
     };
     super::values::from_json(lua, &value).map(Some)
+}
+
+/// Overlapping GUI objects at a screen point, topmost first (by display order
+/// and ZIndex). Used by PlayerGui mouse targeting and drag handling.
+fn gui_objects_at_position(
+    lua: &mlua::Lua,
+    ctx: &WorldRef,
+    id: &str,
+    args: mlua::MultiValue,
+) -> mlua::Result<mlua::MultiValue> {
+    if class(ctx, id) != "PlayerGui" {
+        return Err(err("GetGuiObjectsAtPosition requires PlayerGui"));
+    }
+    let args: Vec<mlua::Value> = args.into_iter().collect();
+    if args.len() != 2 {
+        return Err(err("GetGuiObjectsAtPosition expects x and y"));
+    }
+    let coord = |v: &mlua::Value| -> mlua::Result<f64> {
+        match v {
+            mlua::Value::Integer(n) => Ok(*n as f64),
+            mlua::Value::Number(n) => Ok(*n),
+            _ => Err(err("GUI position must be a number")),
+        }
+    };
+    let px = coord(&args[0])?;
+    let py = coord(&args[1])?;
+    let display = display(ctx);
+    let mut hits: Vec<(i64, i64, String)> = Vec::new();
+    let mut cache = HashMap::new();
+    for child in super::world::descendants(ctx, id) {
+        if !world::is_a(ctx, &child, "GuiObject") || !is_visible(ctx, &child) {
+            continue;
+        }
+        let Ok(b) = box_for(ctx, &child, &display, &mut cache, &mut HashSet::new(), 0) else {
+            continue;
+        };
+        if !b.attached || b.w <= 0. || b.h <= 0. {
+            continue;
+        }
+        if px < b.x || py < b.y || px > b.x + b.w || py > b.y + b.h {
+            continue;
+        }
+        let z = super::gui::number(&prop(ctx, &child, "ZIndex", json!(1)), 1.) as i64;
+        let mut depth = 0;
+        hits.push((z, depth, child));
+        depth += 1;
+    }
+    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    // The engine returns a single array of GuiObjects, topmost first.
+    let array = lua.create_table()?;
+    for (index, (_, _, child)) in hits.into_iter().take(64).enumerate() {
+        array.set(index + 1, world::instance(lua, ctx, &child)?)?;
+    }
+    Ok(mlua::MultiValue::from_vec(vec![mlua::Value::Table(array)]))
 }
 
 fn is_ten_foot_interface(
@@ -2371,6 +2437,7 @@ pub fn install(lua: &mlua::Lua, ctx: &WorldRef) -> mlua::Result<()> {
     world::register_setter(ctx, "SelectionStart", set_selection_start);
     world::register_setter(ctx, "CanvasPosition", set_canvas_position);
     world::register_method(ctx, "GuiService", "GetGuiInset", get_gui_inset);
+    world::register_method(ctx, "PlayerGui", "GetGuiObjectsAtPosition", gui_objects_at_position);
     for key in [
         "TouchControlsEnabled",
         "AutoSelectGuiEnabled",
@@ -2379,6 +2446,14 @@ pub fn install(lua: &mlua::Lua, ctx: &WorldRef) -> mlua::Result<()> {
         "MenuIsOpen",
         "SelectedObject",
         "SelectedCoreObject",
+        "TopbarInset",
+        "ViewportSizeInMM",
+        "PreferredTextSize",
+        "DisplayScalingMode",
+        "ViewportDisplaySize",
+        "PreferredTransparency",
+        "IsModalDialog",
+        "IsWindows",
     ] {
         world::register_keyed_getter(ctx, key, gui_service_property);
     }

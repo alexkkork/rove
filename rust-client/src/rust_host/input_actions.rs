@@ -226,6 +226,21 @@ pub fn dispatch_key(ctx: &WorldRef, key: &str, down: bool, repeat: bool) -> Vec<
     fired
 }
 
+/// `InputBinding:Fire(state)` forwards the value to the parent InputAction.
+fn binding_fire(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    if !world::is_a(ctx, id, "InputBinding") {
+        return Err(error("InputBinding receiver required"));
+    }
+    let action = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .and_then(|n| n.parent.clone())
+        .filter(|parent| world::is_a(ctx, parent, "InputAction"))
+        .ok_or_else(|| error("InputBinding has no parent InputAction"))?;
+    fire(lua, ctx, &action, args)
+}
+
 pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     let _ = MAX_STATE_PUSHES;
     for (name, func) in [
@@ -237,6 +252,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         world::register_method(ctx, "InputAction", name, func);
     }
     world::register_method(ctx, "InputContext", "GetInputActions", context_actions);
+    world::register_method(ctx, "InputBinding", "Fire", binding_fire);
     fn action_event(
         lua: &Lua,
         ctx: &WorldRef,

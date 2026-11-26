@@ -1248,11 +1248,14 @@ fn cast_ray(
         let local_o = mul_t(frame.rotation, delta);
         let local_d = mul_t(frame.rotation, direction);
         let shape = if class == "Part" {
-            let v = world::get_property(ctx, &id, "Shape")?;
-            v.get("$enum")
-                .and_then(|e| e.get("value"))
-                .and_then(Json::as_i64)
-                .unwrap_or(-1)
+            world::get_property(ctx, &id, "Shape")
+                .ok()
+                .and_then(|v| {
+                    v.get("$enum")
+                        .and_then(|e| e.get("value"))
+                        .and_then(Json::as_i64)
+                })
+                .unwrap_or(1)
         } else {
             match class.as_str() {
                 "WedgePart" => 3,
@@ -1403,6 +1406,158 @@ pub(crate) fn pick_ray(
     let mut work = ids.len();
     let groups = group_table(ctx, root).ok();
     cast_ray(ctx, origin, unit, length, ids, &filter, groups.as_ref(), &mut work)
+}
+
+/// Legacy `FindPartOnRay*` family. Returns hit part, position, normal and
+/// material in the historic multi-return shape, using the real raycast.
+fn legacy_ray(
+    lua: &Lua,
+    ctx: &WorldRef,
+    root: &str,
+    args: MultiValue,
+    mode: &str,
+) -> mlua::Result<MultiValue> {
+    let args: Vec<Value> = args.into_iter().collect();
+    if !world::is_a(ctx, root, "Workspace") && !world::is_a(ctx, root, "WorldModel") {
+        return Err(err("legacy ray requires a live WorldRoot"));
+    }
+    let ray_pos = |v: &Value| -> mlua::Result<[f64; 3]> {
+        let ud = match v {
+            Value::UserData(ud) => ud,
+            _ => return Err(err("Ray expected")),
+        };
+        let ray = ud.borrow::<super::misc_values::Ray>()?;
+        Ok([
+            ray.origin[0] as f64,
+            ray.origin[1] as f64,
+            ray.origin[2] as f64,
+        ])
+    };
+    let ray_dir = |v: &Value| -> mlua::Result<[f64; 3]> {
+        let ud = match v {
+            Value::UserData(ud) => ud,
+            _ => return Err(err("Ray expected")),
+        };
+        let ray = ud.borrow::<super::misc_values::Ray>()?;
+        Ok([
+            ray.direction[0] as f64,
+            ray.direction[1] as f64,
+            ray.direction[2] as f64,
+        ])
+    };
+    // Accepted shapes:
+    //   (origin, direction)            both Vector3
+    //   (Ray)                          LegacyRay/FindPartOnRay
+    //   (Ray, ignoreDescendants)
+    //   (Ray, ignoreList, ignoreWater, terrainCellsAreCubes)
+    //   (origin, direction, ignoreList, ignoreWater)  FindPartOnRayWithWhitelist
+    let (origin, direction, ignore, ignore_water) = match args.first() {
+        Some(Value::UserData(_)) if args.len() >= 1 => {
+            let origin = ray_pos(&args[0])?;
+            let direction = ray_dir(&args[0])?;
+            let mut ignore = Vec::new();
+            let mut ignore_water = false;
+            let offset = if mode == "FindPartOnRayWithWhitelist" { 2 } else { 1 };
+            if let Some(Value::Table(list)) = args.get(offset) {
+                for value in list.clone().sequence_values::<Value>() {
+                    if let Ok(Value::UserData(ud)) = value {
+                        if let Some(id) = world::instance_id(&Value::UserData(ud.clone())) {
+                            ignore.push(id);
+                        }
+                    }
+                }
+            }
+            if let Some(Value::Boolean(v)) = args.get(offset + 1) {
+                ignore_water = *v;
+            }
+            (origin, direction, ignore, ignore_water)
+        }
+        Some(a) => {
+            let origin = read_vec(a)?;
+            let Some(b) = args.get(1) else {
+                return Err(err("legacy ray requires a direction"));
+            };
+            let direction = read_vec(b)?;
+            (origin, direction, Vec::new(), false)
+        }
+        None => return Err(err("legacy ray requires a Ray")),
+    };
+    let length = direction[0].hypot(direction[1]).hypot(direction[2]);
+    if length == 0. || !length.is_finite() {
+        return Ok(MultiValue::from_vec(vec![Value::Nil]));
+    }
+    let mut pick = pick_ray(ctx, root, origin, direction, length, &ignore)?;
+    if ignore_water {
+        while let Some(found) = pick.as_ref() {
+            let water = world::get_property(ctx, &found.id, "Material")
+                .ok()
+                .and_then(|v| v.pointer("/$enum/name").and_then(Json::as_str).map(str::to_owned))
+                .as_deref()
+                == Some("Water");
+            if !water {
+                break;
+            }
+            let mut skip = ignore.clone();
+            skip.push(found.id.clone());
+            let remaining = length - found.distance;
+            if remaining <= 0. {
+                pick = None;
+                break;
+            }
+            let start = [
+                origin[0] + direction[0] / length * found.distance,
+                origin[1] + direction[1] / length * found.distance,
+                origin[2] + direction[2] / length * found.distance,
+            ];
+            pick = pick_ray(ctx, root, start, direction, remaining, &skip)?;
+        }
+    }
+    let Some(found) = pick else {
+        return Ok(MultiValue::from_vec(vec![Value::Nil]));
+    };
+    let position = [
+        origin[0] + direction[0] / length * found.distance,
+        origin[1] + direction[1] / length * found.distance,
+        origin[2] + direction[2] / length * found.distance,
+    ];
+    let material = world::get_property(ctx, &found.id, "Material").unwrap_or(json!(256));
+    Ok(MultiValue::from_vec(vec![
+        world::instance(lua, ctx, &found.id)?,
+        Value::Vector(Vector::new(
+            position[0] as f32,
+            position[1] as f32,
+            position[2] as f32,
+        )),
+        Value::Vector(Vector::new(
+            found.normal[0] as f32,
+            found.normal[1] as f32,
+            found.normal[2] as f32,
+        )),
+        values::from_json(lua, &material)?,
+    ]))
+}
+
+fn find_part_on_ray(l: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    legacy_ray(l, c, i, a, "FindPartOnRay")
+}
+fn find_part_on_ray_with_ignore_list(
+    l: &Lua,
+    c: &WorldRef,
+    i: &str,
+    a: MultiValue,
+) -> mlua::Result<MultiValue> {
+    legacy_ray(l, c, i, a, "FindPartOnRayWithIgnoreList")
+}
+fn find_part_on_ray_with_whitelist(
+    l: &Lua,
+    c: &WorldRef,
+    i: &str,
+    a: MultiValue,
+) -> mlua::Result<MultiValue> {
+    legacy_ray(l, c, i, a, "FindPartOnRayWithWhitelist")
+}
+fn find_part_on_ray_lower(l: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    legacy_ray(l, c, i, a, "findPartOnRay")
 }
 
 fn spherecast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Result<MultiValue> {
@@ -1556,11 +1711,14 @@ fn spherecast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::
         let mut p = mul_t(frame.rotation, offset);
         let mut d = mul_t(frame.rotation, dir);
         let shape = if class == "Part" {
-            let v = world::get_property(ctx, &id, "Shape")?;
-            v.get("$enum")
-                .and_then(|e| e.get("value"))
-                .and_then(Json::as_i64)
-                .unwrap_or(-1)
+            world::get_property(ctx, &id, "Shape")
+                .ok()
+                .and_then(|v| {
+                    v.get("$enum")
+                        .and_then(|e| e.get("value"))
+                        .and_then(Json::as_i64)
+                })
+                .unwrap_or(1)
         } else {
             match class.as_str() {
                 "WedgePart" => 3,
@@ -3545,6 +3703,16 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     part_velocity::install(ctx);
     assembly_inertia::install(ctx);
     part_grounded::install(ctx);
+    for (name, method) in [
+        ("FindPartOnRay", find_part_on_ray as world::Method),
+        ("findPartOnRay", find_part_on_ray_lower),
+        ("FindPartOnRayWithIgnoreList", find_part_on_ray_with_ignore_list),
+        ("FindPartOnRayWithWhitelist", find_part_on_ray_with_whitelist),
+        ("FindPartOnRayWithIgnoreList", find_part_on_ray_with_ignore_list),
+    ] {
+        world::register_method(ctx, "Workspace", name, method);
+        world::register_method(ctx, "WorldModel", name, method);
+    }
     world::register_method(ctx, "Workspace", "Raycast", raycast);
     world::register_method(ctx, "WorldModel", "Raycast", raycast);
     world::register_method(ctx, "Workspace", "Spherecast", spherecast);

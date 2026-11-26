@@ -1,0 +1,15 @@
+local lp = game:GetService("Players").LocalPlayer
+local cam = workspace.CurrentCamera
+print("V0 cam", tostring(cam))
+local ok, v = pcall(function() return cam.CFrame.Position end)
+print("V1 campos", ok, tostring(v))
+local ok2, v2 = pcall(function() return workspace.CurrentCamera.Focus.Position end)
+print("V2 focus", ok2, tostring(v2))
+local ok3, v3 = pcall(function() return cam:ViewportSize().X end)
+print("V3 vp", ok3, tostring(v3))
+local ok4, v4 = pcall(function() return cam.ViewportSize.x end)
+print("V4 vpx", ok4, tostring(v4))
+local ok5, v5 = pcall(function() return workspace.CurrentCamera.CFrame.p.X end)
+print("V5 p.X", ok5, tostring(v5))
+local ok6, v6 = pcall(function() return lp.Character end)
+print("V6 char", ok6, tostring(v6))

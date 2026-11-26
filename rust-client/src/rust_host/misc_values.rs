@@ -157,8 +157,8 @@ pub fn region3_bounds(value: &Value) -> Option<([f64; 3], [f64; 3])> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
-    origin: [f32; 3],
-    direction: [f32; 3],
+    pub origin: [f32; 3],
+    pub direction: [f32; 3],
 }
 impl UserData for Ray {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
