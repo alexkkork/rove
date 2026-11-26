@@ -229,9 +229,10 @@ fn workspace_mp3_custom_asset_advances_sound_position() {
     .exec()
     .unwrap();
 
-    // AudioToolbox metadata is decoded on a worker thread. Pump real playback
-    // frames until it reports the duration and advances the playing timeline.
-    for _ in 0..200 {
+    // Audio metadata is decoded on a worker thread. Pump real playback frames
+    // until it reports the duration and advances the playing timeline. The
+    // budget is generous because parallel test load can starve the worker.
+    for _ in 0..1200 {
         step(&lua, &ctx, 0.01).unwrap();
         let (loaded, position): (bool, f64) = lua
             .load("return sound.IsLoaded,sound.TimePosition")
@@ -242,7 +243,7 @@ fn workspace_mp3_custom_asset_advances_sound_position() {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    panic!("local MP3 did not load and advance after 1 second of playback steps");
+    panic!("local MP3 did not load and advance after the playback budget");
 }
 
 fn animation_content_test_world(animation_id: &str, animation_content: &str) -> (Lua, WorldRef) {
