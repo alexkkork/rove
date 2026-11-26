@@ -252,7 +252,16 @@ fn world_pivot(ctx: &WorldRef, id: &str, ids: Option<&[String]>) -> mlua::Result
             if let Some(part) = primary {
                 return frame(ctx, &part, "CFrame");
             }
+            let names = w.nodes.values().map(|n| (n.id.to_string(), n.name.clone(), n.class_name.clone())).collect::<Vec<_>>();
             drop(w);
+            // Prefer a HumanoidRootPart child: it is the canonical character
+            // pivot and needs no Size reads.
+            if let Some((root, _, _)) = names
+                .iter()
+                .find(|(_, name, _)| name == "HumanoidRootPart")
+            {
+                return frame(ctx, root, "CFrame");
+            }
             let owned = descendants(ctx, id)?;
             if !owned.is_empty() {
                 return Ok(bounds(ctx, &owned, Frame::identity())?.0);

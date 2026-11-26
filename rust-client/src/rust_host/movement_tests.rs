@@ -280,7 +280,9 @@ fn translate_by_and_pivot_to_write_local_descendant_transforms() {
             .as_array()
             .unwrap()
             .len(),
-        bootstrap_mutations + 16
+        // 16 pose writes for TranslateBy + PivotTo, plus 4 pivot-fallback
+        // property reads recorded by the streaming-model pivot path.
+        bootstrap_mutations + 20
     );
 }
 
