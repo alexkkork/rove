@@ -3032,11 +3032,9 @@ pub fn set_property(
         }
     }
     let node = world.nodes.get_mut(id).unwrap();
-    if node.destroyed {
-        return Err(mlua::Error::RuntimeError(
-            "cannot write a destroyed instance".into(),
-        ));
-    }
+    // The engine keeps accepting property writes on a destroyed instance (it
+    // just stays detached); PlayerModule's transparency controller relies on
+    // that while its character is being respawned.
     if key == "ClassName" {
         return Err(mlua::Error::RuntimeError("ClassName is read-only".into()));
     }

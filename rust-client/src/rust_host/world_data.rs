@@ -290,12 +290,21 @@ mod tests {
             "an untouched removed record must stay compact after callbacks"
         );
         // The Lua handle survives removal and must keep its original properties.
-        lua.load("assert(lastChild.Parent == nil); assert(lastChild.Name == 'third'); assert(lastChild.Anchored == false); assert(not pcall(function() lastChild.Parent = game end))").exec().unwrap();
+        lua.load("assert(lastChild.Parent == nil); assert(lastChild.Name == 'third'); assert(lastChild.Anchored == false); assert(pcall(function() lastChild.Parent = game end))").exec().unwrap();
         assert!(world.borrow().nodes["r"].destroyed);
+        // Reparenting works on a destroyed instance, so the Parent override now
+        // points at the new container while the node stays destroyed.
         assert_eq!(
             world.borrow().nodes["r"].local_overrides.get("Parent"),
-            Some(&Json::Null)
+            Some(&json!({"$ref":"game"}))
         );
+        // Detach again so the destroyed node returns to its compact form.
+        let mut guard = world.borrow_mut();
+        let node = guard.nodes.get_mut("r").unwrap();
+        node.local_overrides.insert("Parent".into(), Json::Null);
+        node.parent = None;
+        node.local_revision = 0;
+        drop(guard);
         world.borrow_mut().nodes.compact_destroyed("r");
         assert_eq!(world.borrow().nodes.materialized_count(), before);
         let bad = json!({"version":1,"delta":true,"sequence":4,"actions":[

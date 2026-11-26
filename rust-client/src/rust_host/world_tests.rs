@@ -1220,7 +1220,7 @@ fn clear_all_children_destroys_subtrees_but_keeps_the_container_usable() {
     "#).exec().unwrap();
     let report = super::scheduler::step(&lua, &sched, Instant::now(), Duration::from_millis(100));
     assert!(report.errors.is_empty(), "{:?}", report.errors);
-    lua.load("assert(destroyed==3 and table.concat(removed,',')=='first,nested,second'); assert(container.Parent==workspace and #container:GetChildren()==0 and keep.Connected); for _,item in ipairs({first,nested,second}) do assert(item.Parent==nil and not pcall(function() item.Parent=container end)) end; container:ClearAllChildren(); fresh=Instance.new('Part',container)").exec().unwrap();
+    lua.load("assert(destroyed==3 and table.concat(removed,',')=='first,nested,second'); assert(container.Parent==workspace and #container:GetChildren()==0 and keep.Connected); for _,item in ipairs({first,nested,second}) do assert(item.Parent==nil and pcall(function() item.Parent=container end)) end; container:ClearAllChildren(); fresh=Instance.new('Part',container)").exec().unwrap();
     assert!(
         super::scheduler::step(&lua, &sched, Instant::now(), Duration::from_millis(100))
             .errors
