@@ -40,6 +40,7 @@ pub mod playback;
 pub(crate) mod player_lifecycle;
 pub(crate) mod program_context;
 pub mod remotes;
+pub mod render_steps;
 pub mod scheduler;
 pub mod script_threads;
 pub mod sequences;
@@ -85,6 +86,7 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
     movement::install(lua, ctx)?;
     joint_graph::install(ctx);
     input::install(lua, ctx)?;
+    render_steps::install(lua, ctx)?;
     gui::install(lua, ctx)?;
     camera::install(lua, ctx)?;
     drawing::install(lua, ctx)?;

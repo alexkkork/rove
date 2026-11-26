@@ -402,6 +402,8 @@ impl UserData for CFrameValue {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
         f.add_meta_field("__type", "CFrame");
         f.add_field_method_get("Position", |_, c| Ok(native(c.position)));
+        // Lowercase alias used by builtin camera/poppercam scripts.
+        f.add_field_method_get("p", |_, c| Ok(native(c.position)));
         f.add_field_method_get("X", |_, c| Ok(c.position[0]));
         f.add_field_method_get("Y", |_, c| Ok(c.position[1]));
         f.add_field_method_get("Z", |_, c| Ok(c.position[2]));

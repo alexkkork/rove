@@ -148,6 +148,41 @@ fn signal(lua: &Lua, ctx: &WorldRef, id: &str, name: &str) -> Result<Option<Valu
     }
 }
 
+/// Trigger a ProximityPrompt immediately (no hold wait) as if the local
+/// player activated it. Used when a synthetic click lands on a prompt.
+pub(crate) fn trigger_local_prompt(lua: &Lua, ctx: &WorldRef, id: &str) -> Result<()> {
+    let received = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .filter(|n| !n.destroyed)
+        .map(|n| n.server_owned)
+        .ok_or_else(|| error("prompt requires a live Instance"))?;
+    let (player, encoded) = player(lua, ctx)?;
+    signals::fire(lua, ctx, id, "Triggered", MultiValue::from_vec(vec![player.clone()]))?;
+    signals::fire(lua, ctx, id, "TriggerEnded", MultiValue::from_vec(vec![player]))?;
+    if received {
+        reflected(ctx, id, "TriggeredActionReplicated", vec![encoded])?;
+    }
+    Ok(())
+}
+
+/// Fire a local ClickDetector click on a part hit by the cursor.
+pub(crate) fn click_local_detector(lua: &Lua, ctx: &WorldRef, id: &str) -> Result<()> {
+    let received = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .filter(|n| !n.destroyed)
+        .map(|n| n.server_owned)
+        .ok_or_else(|| error("click detector requires a live Instance"))?;
+    let (player, encoded) = player(lua, ctx)?;
+    if received {
+        reflected(ctx, id, "MouseActionReplicated", vec![encoded, json!(0)])?;
+    }
+    signals::fire(lua, ctx, id, "MouseClick", MultiValue::from_vec(vec![player]))
+}
+
 pub fn install(lua: &Lua, ctx: &WorldRef) -> Result<()> {
     for key in [
         "Triggered",

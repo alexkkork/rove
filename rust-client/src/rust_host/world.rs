@@ -2423,6 +2423,9 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
                 return Ok(value);
             }
         }
+        if let Some(value) = client_omitted_default(&node.class_name, key) {
+            return Ok(value);
+        }
         if world.lightweight_assets && super::world_aliases::is_lightweight_asset(key) {
             return Err(mlua::Error::RuntimeError(format!(
                 "property '{key}' unavailable in lightweight asset mode"
@@ -2461,10 +2464,99 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
             return Ok(default);
         }
     }
+    if let Some(default) = client_omitted_default(&node.class_name, key) {
+        return Ok(default);
+    }
     Err(mlua::Error::RuntimeError(format!(
         "property '{key}' unavailable in snapshot for {} ({})",
         node.class_name, node.class_name
     )))
+}
+
+/// Engine defaults for client-side properties that replication omits.
+fn client_omitted_default(class: &str, key: &str) -> Option<Json> {
+    // InputBinding is client-built by PlayerModule; replicated copies omit
+    // most defaults (scale vectors, thresholds, enum directions).
+    if class == "InputBinding" {
+        return input_binding_default(key);
+    }
+    // GUI layout defaults live in the GuiObject/GuiBase2d base classes and are
+    // omitted for freshly created UI. Streaming servers therefore hand scripts
+    // Frames without Position/AnchorPoint/SizeConstraint, which used to break
+    // every responsive layout. Supply the engine defaults.
+    if class_chain(class).iter().any(|c| c == "GuiObject") {
+        if let Some(default) = gui_object_default(key) {
+            return Some(default);
+        }
+    }
+    if class_chain(class).iter().any(|c| c == "GuiBase2d") {
+        return gui_base_default(key);
+    }
+    None
+}
+
+/// Client-owned `InputBinding` defaults that replication omits.
+fn input_binding_default(key: &str) -> Option<Json> {
+    let key_enum = |name: &str| json!({"$enum":{"type":"KeyCode","name":name,"value":0}});
+    let value = match key {
+        "Vector2Scale" => json!({"$vector2":[1,1]}),
+        "Vector3Scale" => json!({"$vector3":[1,1,1]}),
+        "PressedThreshold" => json!(0.5),
+        "ReleasedThreshold" => json!(0.1),
+        "ResponseCurve" => json!(1),
+        "Scale" => json!(1),
+        "PointerIndex" => json!(1),
+        "ClampMagnitudeToOne" => json!(true),
+        "DisplayName" => json!(""),
+        "Type" => json!({"$enum":{"type":"InputBindingType","name":"Automatic","value":0}}),
+        "UIButton" | "UIModifier" => Json::Null,
+        "Forward" | "Backward" | "Left" | "Right" | "Up" | "Down" => key_enum("None"),
+        "KeyCode" | "PrimaryModifier" | "SecondaryModifier" => key_enum("None"),
+        _ => return None,
+    };
+    Some(value)
+}
+
+fn gui_base_default(key: &str) -> Option<Json> {
+    let value = match key {
+        "Rotation" => json!(0),
+        "Localize" | "AutoLocalize" => json!(true),
+        "SelectionOrder" | "SelectionGroup" => json!(0),
+        "SelectionImageObject" | "RootLocalizationTable" => Json::Null,
+        "Archivable" | "archivable" => json!(true),
+        _ => return None,
+    };
+    Some(value)
+}
+
+/// Inherited `GuiBase2d` defaults that replication omits.
+fn gui_base_default_placeholder() {}
+
+/// Inherited `GuiObject` defaults that replication omits. Values match the
+/// engine constructor; `Position`/`Size` default to zero UDim2 and
+/// `AnchorPoint` to zero Vector2, which is what responsive layouts expect.
+fn gui_object_default(key: &str) -> Option<Json> {
+    let value = match key {
+        "Position" => json!({"$udim2":[{"$udim":[0,0]},{"$udim":[0,0]}]}),
+        "Size" => json!({"$udim2":[{"$udim":[0,0]},{"$udim":[0,0]}]}),
+        "AnchorPoint" => json!({"$vector2":[0,0]}),
+        "BackgroundColor3" => json!({"$color3":[1,1,1]}),
+        "BackgroundTransparency" | "Transparency" => json!(0),
+        "BorderColor3" => json!({"$color3":[0,0,0]}),
+        "BorderSizePixel" => json!(1),
+        "SizeConstraint" => json!({"$enum":{"type":"SizeConstraint","name":"RelativeXY","value":0}}),
+        "AutomaticSize" => json!({"$enum":{"type":"AutomaticSize","name":"None","value":0}}),
+        "ClipsDescendants" | "Draggable" | "Selectable" | "Active" | "SelectionGroup" => json!(false),
+        "Interactable" => json!(true),
+        "ZIndex" => json!(1),
+        "LayoutOrder" => json!(0),
+        "Visible" => json!(true),
+        "NextSelectionUp" | "NextSelectionDown" | "NextSelectionLeft" | "NextSelectionRight" => {
+            Json::Null
+        }
+        _ => return None,
+    };
+    Some(value)
 }
 
 fn archivable_class_default(class: &str) -> Option<Json> {
@@ -3537,6 +3629,7 @@ fn local_service_supported(class: &str) -> bool {
     matches!(
         class,
         "VirtualInputManager"
+            | "VirtualUser"
             | "VRService"
             | "SoundService"
             | "PhysicsService"

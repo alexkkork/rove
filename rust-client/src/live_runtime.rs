@@ -795,6 +795,15 @@ impl LiveRuntime {
                     .ok_or("initial shared world unavailable")?,
                 projection.clone(),
             );
+            // Headless sessions have no device probe. Publish the desktop
+            // keyboard/mouse capability snapshot so PlayerMouse and input APIs
+            // report real device support instead of collapsing to disabled.
+            snapshot.as_object_mut().unwrap().insert(
+                "input_capabilities".into(),
+                json!({"KeyboardEnabled":true,"MouseEnabled":true,"TouchEnabled":false,
+                       "GamepadEnabled":false,"AccelerometerEnabled":false,
+                       "GyroscopeEnabled":false,"VREnabled":false}),
+            );
             self.compacted_nodes += compact_snapshot(&mut snapshot, &view)? as u64;
             let sequence = snapshot["sequence"]
                 .as_u64()

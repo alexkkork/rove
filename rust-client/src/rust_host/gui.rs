@@ -1860,6 +1860,27 @@ pub fn scroll_by(ctx: &WorldRef, id: &str, delta: [f64; 2]) -> Result<[f64; 2], 
     Ok(consumed)
 }
 
+/// Client-only GuiService properties that replication never carries.
+fn gui_service_property(
+    lua: &mlua::Lua,
+    ctx: &WorldRef,
+    id: &str,
+    key: &str,
+) -> mlua::Result<Option<mlua::Value>> {
+    if class(ctx, id) != "GuiService" {
+        return Ok(None);
+    }
+    let value = match key {
+        "TouchControlsEnabled" => Json::Bool(false),
+        "AutoSelectGuiEnabled" | "GuiNavigationEnabled" => Json::Bool(false),
+        "ReducedMotionEnabled" => Json::Bool(false),
+        "MenuIsOpen" => Json::Bool(false),
+        "SelectedObject" | "SelectedCoreObject" => Json::Null,
+        _ => return Ok(None),
+    };
+    super::values::from_json(lua, &value).map(Some)
+}
+
 fn is_ten_foot_interface(
     _lua: &mlua::Lua,
     ctx: &WorldRef,
@@ -2350,6 +2371,17 @@ pub fn install(lua: &mlua::Lua, ctx: &WorldRef) -> mlua::Result<()> {
     world::register_setter(ctx, "SelectionStart", set_selection_start);
     world::register_setter(ctx, "CanvasPosition", set_canvas_position);
     world::register_method(ctx, "GuiService", "GetGuiInset", get_gui_inset);
+    for key in [
+        "TouchControlsEnabled",
+        "AutoSelectGuiEnabled",
+        "GuiNavigationEnabled",
+        "ReducedMotionEnabled",
+        "MenuIsOpen",
+        "SelectedObject",
+        "SelectedCoreObject",
+    ] {
+        world::register_keyed_getter(ctx, key, gui_service_property);
+    }
     world::register_method(ctx, "GuiService", "IsTenFootInterface", is_ten_foot_interface);
     world::register_method(ctx, "UIListLayout", "ApplyLayout", apply_layout);
     world::register_method(ctx, "UIGridLayout", "ApplyLayout", apply_layout);

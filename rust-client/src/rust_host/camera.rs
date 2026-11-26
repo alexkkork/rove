@@ -268,6 +268,17 @@ fn initialize_client_camera(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         return Ok(());
     }
     let camera = world::create_instance(lua, ctx, "Camera", Some(&workspace))?;
+    let camera_id = world::instance_id(&camera).ok_or_else(|| error("camera id missing"))?;
+    // CameraType is a client-only enum that never appears in replication; the
+    // engine starts in Custom and scripts switch it. Pin the default so reads
+    // and writes both work without a snapshot value.
+    world::set_engine_property(
+        ctx,
+        &camera_id,
+        "CameraType",
+        json!({"$enum":{"type":"CameraType","name":"Custom","value":5}}),
+        None,
+    )?;
     let reference = values::to_json(lua, &camera)?;
     world::set_property(lua, ctx, &workspace, "CurrentCamera", reference)
 }
@@ -361,6 +372,14 @@ fn update_surface(ctx: &WorldRef, supplied_fov: &[&str]) -> mlua::Result<Vec<(St
 pub(crate) struct CameraObservation {
     sequence: u64,
     cameras: Vec<(String, Surface, Option<f64>)>,
+}
+/// Surface viewport size for a camera, used by PlayerMouse.ViewSizeX/Y.
+pub(crate) fn viewport_size(ctx: &WorldRef, id: &str) -> [f64; 2] {
+    surface(ctx, id).viewport()
+}
+/// Stable accessor for the client-owned CurrentCamera.
+pub(crate) fn current_camera(ctx: &WorldRef) -> Option<String> {
+    current(ctx)
 }
 fn current(ctx: &WorldRef) -> Option<String> {
     let workspace = ctx.borrow().services.get("Workspace")?.clone();
@@ -588,39 +607,22 @@ fn project(
         Value::Boolean(on_screen),
     ]))
 }
-fn point_to_ray(
+/// Build a world-space ray from a viewport/screen point. Shared with local
+/// mouse picking used by VirtualUser and Player:GetMouse().
+pub(crate) fn screen_ray(
     lua: &Lua,
     ctx: &WorldRef,
     id: &str,
-    args: MultiValue,
+    point: [f64; 2],
     screen: bool,
-) -> mlua::Result<MultiValue> {
+) -> mlua::Result<([f64; 3], [f64; 3])> {
     camera(ctx, id)?;
-    if !(2..=3).contains(&args.len()) {
-        return Err(error("camera ray expects x, y and optional depth"));
-    }
-    let number = |v: &Value| -> mlua::Result<f64> {
-        let n = match v {
-            Value::Integer(n) => *n as f64,
-            Value::Number(n) => *n,
-            _ => return Err(error("ray coordinates must be numbers")),
-        };
-        if !n.is_finite() {
-            return Err(error("ray coordinates must be finite"));
-        }
-        Ok(n)
-    };
     let vp = surface(ctx, id);
     let focal = lens(ctx, id, vp)?;
     let cf = frame(lua, ctx, id)?;
     let inset = if screen { vp.core } else { vp.device };
-    let x = number(&args[0])? + inset[0];
-    let y = number(&args[1])? + inset[1];
-    let depth = if args.len() == 3 && !matches!(args[2], Value::Nil) {
-        number(&args[2])?
-    } else {
-        0.
-    };
+    let x = point[0] + inset[0];
+    let y = point[1] + inset[1];
     let mut direction = rotate(
         cf.rotation,
         [
@@ -641,14 +643,46 @@ fn point_to_ray(
     if near > 0. || forward <= 0. {
         return Err(error("invalid camera near plane"));
     }
-    let distance = depth - near / forward;
-    let origin = std::array::from_fn::<_, 3, _>(|i| cf.position[i] + distance * direction[i]);
+    let origin = std::array::from_fn::<_, 3, _>(|i| cf.position[i] - (near / forward) * direction[i]);
     if origin
         .iter()
         .chain(&direction)
         .any(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
     {
         return Err(error("camera ray exceeds finite Vector3 range"));
+    }
+    Ok((origin, direction))
+}
+
+fn point_to_ray(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    args: MultiValue,
+    screen: bool,
+) -> mlua::Result<MultiValue> {
+    if !(2..=3).contains(&args.len()) {
+        return Err(error("camera ray expects x, y and optional depth"));
+    }
+    let number = |v: &Value| -> mlua::Result<f64> {
+        let n = match v {
+            Value::Integer(n) => *n as f64,
+            Value::Number(n) => *n,
+            _ => return Err(error("ray coordinates must be numbers")),
+        };
+        if !n.is_finite() {
+            return Err(error("ray coordinates must be finite"));
+        }
+        Ok(n)
+    };
+    let x = number(&args[0])?;
+    let y = number(&args[1])?;
+    let (mut origin, direction) = screen_ray(lua, ctx, id, [x, y], screen)?;
+    if args.len() == 3 && !matches!(args[2], Value::Nil) {
+        let depth = number(&args[2])?;
+        for i in 0..3 {
+            origin[i] += depth * direction[i];
+        }
     }
     Ok(MultiValue::from_vec(vec![values::from_json(
         lua,

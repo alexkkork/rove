@@ -1115,57 +1115,26 @@ fn query_ids(ctx: &WorldRef, root: &str) -> mlua::Result<Vec<String>> {
     }
     Ok(result)
 }
-fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Result<MultiValue> {
-    let args: Vec<Value> = args.into_iter().collect();
-    if args.len() < 2 || args.len() > 3 {
-        return Err(err(
-            "Raycast expects origin, direction and optional RaycastParams",
-        ));
-    }
-    let origin = read_vec(&args[0])?;
-    let mut direction = read_vec(&args[1])?;
-    let length = direction[0].hypot(direction[1]).hypot(direction[2]);
-    if length > MAX_DISTANCE {
-        return Err(err("Raycast direction exceeds 15000 studs"));
-    }
-    if length == 0. {
-        return Ok(MultiValue::from_vec(vec![Value::Nil]));
-    }
-    for x in &mut direction {
-        *x /= length
-    }
-    let filter = if let Some(value) = args.get(2).filter(|v| !matches!(v, Value::Nil)) {
-        if !misc_values::query_params_belongs_to(value, ctx) {
-            return Err(err("RaycastParams belongs to another world"));
-        }
-        let config =
-            misc_values::query_config(value).ok_or_else(|| err("RaycastParams expected"))?;
-        if config.overlap {
-            return Err(err("RaycastParams expected"));
-        }
-        query_filter(&config)
-    } else {
-        Filter::default()
-    };
-    if filter.margin != 0. {
-        return Err(err(
-            "Raycast Margin is unavailable; use Spherecast for explicit sphere casting",
-        ));
-    }
-    if !world::is_a(ctx, root, "Workspace") && !world::is_a(ctx, root, "WorldModel") {
-        return Err(err("Raycast requires a live WorldRoot"));
-    }
-    let ids = query_ids(ctx, root)?;
-    let groups = if filter.brute_force {
-        None
-    } else {
-        Some(group_table(ctx, root)?)
-    };
+/// March a single ray against already-gathered candidate parts ranged to
+/// `root`. Shared by `Workspace:Raycast` and the local mouse/VirtualUser pick.
+pub(crate) struct RayPick {
+    pub distance: f64,
+    pub id: String,
+    pub normal: [f64; 3],
+    pub material: Json,
+}
+
+fn cast_ray(
+    ctx: &WorldRef,
+    origin: [f64; 3],
+    direction: [f64; 3],
+    length: f64,
+    ids: Vec<String>,
+    filter: &Filter,
+    groups: Option<&GroupTable>,
+    work: &mut usize,
+) -> mlua::Result<Option<RayPick>> {
     let mut best: Option<(f64, String, [f64; 3], Json)> = None;
-    let mut work = ids.len();
-    if work > 1_000_000 {
-        return Err(err("ray query geometry work limit exceeded"));
-    }
     for id in ids {
         let (class, destroyed) = {
             let w = ctx.borrow();
@@ -1176,7 +1145,7 @@ fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Res
         if destroyed || (!is_terrain && !world::is_a(ctx, &id, "BasePart")) {
             continue;
         }
-        if !filtered(ctx, &id, &filter, groups.as_ref())? {
+        if !filtered(ctx, &id, filter, groups)? {
             continue;
         }
         if is_terrain {
@@ -1189,10 +1158,10 @@ fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Res
                     direction,
                     length,
                     filter.ignore_water,
-                    &mut work,
+                    work,
                 )?,
                 Some("triangle_mesh") => {
-                    ray_mesh(ctx, &id, &data, origin, direction, length, &mut work)?
+                    ray_mesh(ctx, &id, &data, origin, direction, length, work)?
                         .map(|(t, n)| (t, n, data.get("material").cloned().unwrap_or(Json::Null)))
                 }
                 _ => return Err(err("ray query Terrain collision geometry is unavailable")),
@@ -1214,7 +1183,7 @@ fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Res
             let data = world::get_property(ctx, &id, "CollisionGeometry")
                 .map_err(|_| err("collision geometry is unavailable"))?;
             let Some((distance, normal)) =
-                ray_mesh(ctx, &id, &data, origin, direction, length, &mut work)?
+                ray_mesh(ctx, &id, &data, origin, direction, length, work)?
             else {
                 continue;
             };
@@ -1271,7 +1240,71 @@ fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Res
             best = Some((distance, id, normal, material));
         }
     }
-    let value = if let Some((distance, id, normal, material)) = best {
+    Ok(best.map(|(distance, id, normal, material)| RayPick {
+        distance,
+        id,
+        normal,
+        material,
+    }))
+}
+fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    let args: Vec<Value> = args.into_iter().collect();
+    if args.len() < 2 || args.len() > 3 {
+        return Err(err(
+            "Raycast expects origin, direction and optional RaycastParams",
+        ));
+    }
+    let origin = read_vec(&args[0])?;
+    let mut direction = read_vec(&args[1])?;
+    let length = direction[0].hypot(direction[1]).hypot(direction[2]);
+    if length > MAX_DISTANCE {
+        return Err(err("Raycast direction exceeds 15000 studs"));
+    }
+    if length == 0. {
+        return Ok(MultiValue::from_vec(vec![Value::Nil]));
+    }
+    for x in &mut direction {
+        *x /= length
+    }
+    let filter = if let Some(value) = args.get(2).filter(|v| !matches!(v, Value::Nil)) {
+        if !misc_values::query_params_belongs_to(value, ctx) {
+            return Err(err("RaycastParams belongs to another world"));
+        }
+        let config =
+            misc_values::query_config(value).ok_or_else(|| err("RaycastParams expected"))?;
+        if config.overlap {
+            return Err(err("RaycastParams expected"));
+        }
+        query_filter(&config)
+    } else {
+        Filter::default()
+    };
+    if filter.margin != 0. {
+        return Err(err(
+            "Raycast Margin is unavailable; use Spherecast for explicit sphere casting",
+        ));
+    }
+    if !world::is_a(ctx, root, "Workspace") && !world::is_a(ctx, root, "WorldModel") {
+        return Err(err("Raycast requires a live WorldRoot"));
+    }
+    let ids = query_ids(ctx, root)?;
+    let groups = if filter.brute_force {
+        None
+    } else {
+        Some(group_table(ctx, root)?)
+    };
+    let mut work = ids.len();
+    if work > 1_000_000 {
+        return Err(err("ray query geometry work limit exceeded"));
+    }
+    let best = cast_ray(ctx, origin, direction, length, ids, &filter, groups.as_ref(), &mut work)?;
+    let value = if let Some(RayPick {
+        distance,
+        id,
+        normal,
+        material,
+    }) = best
+    {
         let p = [
             origin[0] + direction[0] * distance,
             origin[1] + direction[1] * distance,
@@ -1296,6 +1329,40 @@ fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Res
     };
     Ok(MultiValue::from_vec(vec![value]))
 }
+/// Pick the nearest part along a world ray without needing a Luau VM. Used by
+/// the local pointer/mouse pipeline. Returns `None` when nothing is hit.
+pub(crate) fn pick_ray(
+    ctx: &WorldRef,
+    root: &str,
+    origin: [f64; 3],
+    direction: [f64; 3],
+    length: f64,
+    exclude: &[String],
+) -> mlua::Result<Option<RayPick>> {
+    if length <= 0. || length > MAX_DISTANCE {
+        return Ok(None);
+    }
+    let mut unit = direction;
+    let len = unit[0].hypot(unit[1]).hypot(unit[2]);
+    if len == 0. || !len.is_finite() {
+        return Ok(None);
+    }
+    for v in &mut unit {
+        *v /= len;
+    }
+    let filter = Filter {
+        exclude: exclude.to_vec(),
+        ..Filter::default()
+    };
+    let ids = query_ids(ctx, root)?;
+    if ids.len() > 1_000_000 {
+        return Err(err("pick query geometry work limit exceeded"));
+    }
+    let mut work = ids.len();
+    let groups = group_table(ctx, root).ok();
+    cast_ray(ctx, origin, unit, length, ids, &filter, groups.as_ref(), &mut work)
+}
+
 fn spherecast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let args: Vec<Value> = args.into_iter().collect();
     if args.len() < 3 || args.len() > 4 {

@@ -1,0 +1,35 @@
+local vu = game:GetService("VirtualUser")
+local uis = game:GetService("UserInputService")
+local rs = game:GetService("RunService")
+local lp = game:GetService("Players").LocalPlayer
+local mouse = lp:GetMouse()
+print("A1 vu", typeof(vu), "uis mouse", tostring(uis.MouseEnabled))
+print("A2 pred", tostring(rs:GetPredictionStatus()))
+print("A3 step", tostring(rs:GetPhysicsStepId()))
+print("A4 ver", tostring(rs:GetRobloxVersion()))
+local ug = UserSettings().GameSettings
+print("A5 invert", tostring(ug:GetCameraYInvertValue()), tostring(ug:GetDefaultFramerateCap()))
+print("A6 touch", tostring(game:GetService("GuiService").TouchControlsEnabled))
+local cam = workspace.CurrentCamera
+print("A7 camtype", tostring(cam.CameraType))
+local frames = 0
+rs:BindToRenderStep("probe", Enum.RenderPriority.Camera.Value, function(dt) frames += 1 end)
+vu:CaptureController()
+vu:MoveMouse(Vector2.new(640, 360))
+task.wait(0.4)
+print("A8 pos", tostring(mouse.X), tostring(mouse.Y), "target", tostring(mouse.Target))
+print("A9 hit", tostring(mouse.Hit.Position), "ray", typeof(mouse.UnitRay))
+vu:ClickButton1(Vector2.new(640, 360))
+print("A10 clicked")
+task.wait(0.3)
+print("A11 rendersteps", frames)
+rs:UnbindFromRenderStep("probe")
+print("A12 char", tostring(lp.Character and lp.Character.Name))
+local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+print("A13 hrp", hrp and math.floor(hrp.Position.Y))
+-- GUI defaults sanity
+local sg = Instance.new("ScreenGui")
+local f = Instance.new("Frame")
+f.Parent = sg
+print("A14 gui", tostring(f.AbsoluteSize.X), tostring(f.AbsolutePosition.X), tostring(f.Visible))
+print("A15 done")

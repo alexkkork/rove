@@ -726,8 +726,12 @@ fn set_humanoid_jump(lua: &Lua, ctx: &WorldRef, id: &str, value: Value) -> mlua:
     if class(ctx, id)? != "Humanoid" {
         return Ok(false);
     }
-    let Value::Boolean(requested) = value else {
-        return Err(err("Jump must be a boolean"));
+    // PlayerModule assigns `GetIsJumping() or (touchController and ...)`, which
+    // yields nil on desktop. The engine coerces nil to false.
+    let requested = match value {
+        Value::Boolean(v) => v,
+        Value::Nil => false,
+        _ => return Err(err("Jump must be a boolean")),
     };
     if requested { validate_intent_queue(lua,ctx)?; }
     let previous = world::get_property(ctx, id, "Jump").ok();

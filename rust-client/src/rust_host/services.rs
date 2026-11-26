@@ -822,47 +822,46 @@ fn player_method(
                     "GetMouse requires LocalPlayer".into(),
                 ));
             }
-            if lua.app_data_ref::<PlayerMouseCache>().is_none() {
-                lua.set_app_data(PlayerMouseCache::default());
-            }
-            let cache = lua
-                .app_data_ref::<PlayerMouseCache>()
-                .expect("mouse cache installed")
-                .clone();
-            let key = (world_key(ctx), id.to_owned());
-            let cached = cache.borrow().get(&key).cloned();
-            let mouse_id = if let Some(cached) =
-                cached.filter(|mouse| ctx.borrow().nodes.get(mouse).is_some_and(|n| !n.destroyed))
-            {
-                cached
-            } else {
-                let properties = serde_json::Map::from_iter([
-                    ("Icon".to_owned(), json!("")),
-                    ("TargetFilter".to_owned(), Json::Null),
-                ]);
-                let mouse = world::create_internal_node(
-                    lua,
-                    ctx,
-                    "PlayerMouse",
-                    None,
-                    properties,
-                )?;
-                let mouse_id = world::instance_id(&mouse).ok_or_else(|| {
-                    mlua::Error::RuntimeError("could not create PlayerMouse".into())
-                })?;
-                if let Value::UserData(userdata) = mouse {
-                    userdata.set("Name", "Mouse")?;
-                    userdata.set("Icon", "")?;
-                    userdata.set("TargetFilter", Value::Nil)?;
-                }
-                cache.borrow_mut().insert(key, mouse_id.clone());
-                mouse_id
-            };
+            let mouse_id = local_mouse(lua, ctx, id)?;
             result.push_back(world::instance(lua, ctx, &mouse_id)?);
         }
         _ => return Err(expected("Player", method)),
     }
     Ok(result)
+}
+
+/// Stable per-VM PlayerMouse for the LocalPlayer, creating it on first use.
+/// Shared by `Player:GetMouse()` and the VirtualUser mouse surface so both see
+/// the same instance and coordinate/hit state.
+pub(crate) fn local_mouse(lua: &Lua, ctx: &WorldRef, player: &str) -> mlua::Result<String> {
+    if lua.app_data_ref::<PlayerMouseCache>().is_none() {
+        lua.set_app_data(PlayerMouseCache::default());
+    }
+    let cache = lua
+        .app_data_ref::<PlayerMouseCache>()
+        .expect("mouse cache installed")
+        .clone();
+    let key = (world_key(ctx), player.to_owned());
+    let cached = cache.borrow().get(&key).cloned();
+    if let Some(cached) =
+        cached.filter(|mouse| ctx.borrow().nodes.get(mouse).is_some_and(|n| !n.destroyed))
+    {
+        return Ok(cached);
+    }
+    let properties = serde_json::Map::from_iter([
+        ("Icon".to_owned(), json!("")),
+        ("TargetFilter".to_owned(), Json::Null),
+    ]);
+    let mouse = world::create_internal_node(lua, ctx, "PlayerMouse", None, properties)?;
+    let mouse_id = world::instance_id(&mouse)
+        .ok_or_else(|| mlua::Error::RuntimeError("could not create PlayerMouse".into()))?;
+    if let Value::UserData(userdata) = mouse {
+        userdata.set("Name", "Mouse")?;
+        userdata.set("Icon", "")?;
+        userdata.set("TargetFilter", Value::Nil)?;
+    }
+    cache.borrow_mut().insert(key, mouse_id.clone());
+    Ok(mouse_id)
 }
 
 fn http_method(
@@ -1057,6 +1056,83 @@ fn run_state(
     Ok(out)
 }
 
+
+/// RunService helpers that describe the local client, not remote state.
+fn run_info(lua: &Lua, ctx: &WorldRef, id: &str, method: &str) -> mlua::Result<MultiValue> {
+    if ctx.borrow().nodes.get(id).map(|n| n.class_name.as_str()) != Some("RunService") {
+        return Err(expected("RunService", method));
+    }
+    let mut out = MultiValue::new();
+    match method {
+        // The local simulation always steps against the latest authoritative
+        // world, so prediction status reports the authoritative tick.
+        "GetPredictionStatus" => out.push_back(Value::UserData(super::enums::enum_item(
+            lua,
+            "PredictionStatus",
+            "Authoritative",
+        )?)),
+        "GetPhysicsStepId" => out.push_back(Value::Integer(
+            ctx.borrow().sequence.min(i64::MAX as u64) as i64,
+        )),
+        "GetRobloxVersion" => {
+            let version = ctx
+                .borrow()
+                .snapshot
+                .get("runtime_version")
+                .and_then(Json::as_str)
+                .unwrap_or("0.745.0.7450000")
+                .to_owned();
+            out.push_back(Value::String(lua.create_string(version)?));
+        }
+        "GetCoreScriptVersion" => {
+            out.push_back(Value::String(lua.create_string("745")?));
+        }
+        "GetRobloxClientChannel" => {
+            out.push_back(Value::String(lua.create_string("production")?));
+        }
+        "GetRobloxGuiFocused" => out.push_back(Value::Boolean(false)),
+        "getThrottleFramerateEnabled" => out.push_back(Value::Boolean(false)),
+        "IsResimulating" | "IsTeamTest" | "IsTeamCreateViewer" => {
+            out.push_back(Value::Boolean(false))
+        }
+        "GetControlAndVariantRolloutFlags"
+        | "GetRobloxClientIxpEnrolledExperiments" => {
+            out.push_back(Value::Integer(0))
+        }
+        "GetTotalScriptPlusExecutionTime" => out.push_back(Value::Number(0.)),
+        "Set3dRenderingEnabled" | "SetPredictionMode" | "SetRobloxGuiFocused"
+        | "setThrottleFramerateEnabled" | "Pause" | "Run" | "Stop" | "Reset" => {}
+        _ => return Err(expected("RunService", method)),
+    }
+    Ok(out)
+}
+macro_rules! run_info_wrapper {
+    ($name:ident, $method:literal) => {
+        fn $name(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+            if !args.is_empty()
+                && !matches!($method, "Set3dRenderingEnabled" | "SetPredictionMode" | "SetRobloxGuiFocused" | "setThrottleFramerateEnabled")
+            {
+                return Err(mlua::Error::RuntimeError(concat!($method, " takes no arguments").to_string()));
+            }
+            run_info(lua, ctx, id, $method)
+        }
+    };
+}
+run_info_wrapper!(run_prediction_status, "GetPredictionStatus");
+run_info_wrapper!(run_physics_step, "GetPhysicsStepId");
+run_info_wrapper!(run_version, "GetRobloxVersion");
+run_info_wrapper!(run_core_version, "GetCoreScriptVersion");
+run_info_wrapper!(run_channel, "GetRobloxClientChannel");
+run_info_wrapper!(run_gui_focused, "GetRobloxGuiFocused");
+run_info_wrapper!(run_throttle, "getThrottleFramerateEnabled");
+run_info_wrapper!(run_resimulating, "IsResimulating");
+run_info_wrapper!(run_team_test, "IsTeamTest");
+run_info_wrapper!(run_team_viewer, "IsTeamCreateViewer");
+run_info_wrapper!(run_rollout, "GetControlAndVariantRolloutFlags");
+run_info_wrapper!(run_ixp, "GetRobloxClientIxpEnrolledExperiments");
+run_info_wrapper!(run_script_time, "GetTotalScriptPlusExecutionTime");
+run_info_wrapper!(run_noop, "Pause");
+
 fn ensure_user_settings(lua: &Lua, ctx: &WorldRef) -> mlua::Result<String> {
     if let Some(id) = ctx.borrow().services.get("UserSettings").cloned() {
         return Ok(id);
@@ -1117,6 +1193,74 @@ fn ensure_user_settings(lua: &Lua, ctx: &WorldRef) -> mlua::Result<String> {
         .services
         .insert("UserGameSettings".into(), game_settings_id);
     Ok(settings_id)
+}
+
+/// Expose the local defaults for settings properties as read-only values.
+fn client_setting_getter(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    key: &str,
+) -> mlua::Result<Option<Value>> {
+    let value = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .filter(|n| n.class_name == "UserGameSettings")
+        .and_then(|n| {
+            n.local_overrides
+                .get(key)
+                .or_else(|| n.properties.get(key))
+                .cloned()
+        });
+    match value {
+        Some(value) => values::from_json(lua, &value).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn user_game_settings(ctx: &WorldRef, id: &str) -> mlua::Result<String> {
+    if ctx.borrow().nodes.get(id).map(|n| n.class_name.as_str()) != Some("UserGameSettings") {
+        return Err(mlua::Error::RuntimeError(
+            "UserGameSettings receiver required".into(),
+        ));
+    }
+    Ok(id.to_owned())
+}
+
+fn game_settings_int(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    let id = user_game_settings(ctx, id)?;
+    if !args.is_empty() {
+        return Err(mlua::Error::RuntimeError(
+            "GetCameraYInvertValue takes no arguments".into(),
+        ));
+    }
+    let invert = ctx
+        .borrow()
+        .nodes
+        .get(&id)
+        .and_then(|n| n.properties.get("CameraYInverted"))
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    // 0 = normal, 1 = inverted, 2 = user choice unpinned.
+    Ok(MultiValue::from_vec(vec![Value::Integer(if invert { 1 } else { 0 })]))
+}
+fn game_settings_cap(_l: &Lua, _c: &WorldRef, _i: &str, _a: MultiValue) -> mlua::Result<MultiValue> {
+    // Headless runtime is uncapped; report the engine's default 60 cap.
+    Ok(MultiValue::from_vec(vec![Value::Integer(60)]))
+}
+fn game_settings_true(lua: &Lua, _c: &WorldRef, _i: &str, _a: MultiValue) -> mlua::Result<MultiValue> {
+    let _ = lua;
+    Ok(MultiValue::from_vec(vec![Value::Boolean(true)]))
+}
+fn game_settings_false(_l: &Lua, _c: &WorldRef, _i: &str, _a: MultiValue) -> mlua::Result<MultiValue> {
+    Ok(MultiValue::from_vec(vec![Value::Boolean(false)]))
+}
+fn game_settings_fullscreen(_l: &Lua, _c: &WorldRef, _i: &str, _a: MultiValue) -> mlua::Result<MultiValue> {
+    Ok(MultiValue::from_vec(vec![Value::Boolean(false)]))
+}
+fn game_settings_noop(_l: &Lua, _c: &WorldRef, _i: &str, _a: MultiValue) -> mlua::Result<MultiValue> {
+    Ok(MultiValue::new())
 }
 
 fn client_setting_setter(
@@ -1329,6 +1473,27 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         ("IsEdit", run_is_edit),
         ("IsRunMode", run_is_run_mode),
         ("IsRunning", run_is_running),
+        ("GetPredictionStatus", run_prediction_status),
+        ("GetPhysicsStepId", run_physics_step),
+        ("GetRobloxVersion", run_version),
+        ("GetCoreScriptVersion", run_core_version),
+        ("GetRobloxClientChannel", run_channel),
+        ("GetRobloxGuiFocused", run_gui_focused),
+        ("getThrottleFramerateEnabled", run_throttle),
+        ("IsResimulating", run_resimulating),
+        ("IsTeamTest", run_team_test),
+        ("IsTeamCreateViewer", run_team_viewer),
+        ("GetControlAndVariantRolloutFlags", run_rollout),
+        ("GetRobloxClientIxpEnrolledExperiments", run_ixp),
+        ("GetTotalScriptPlusExecutionTime", run_script_time),
+        ("Pause", run_noop),
+        ("Run", run_noop),
+        ("Stop", run_noop),
+        ("Reset", run_noop),
+        ("Set3dRenderingEnabled", run_noop),
+        ("SetPredictionMode", run_noop),
+        ("SetRobloxGuiFocused", run_noop),
+        ("setThrottleFramerateEnabled", run_noop),
     ] {
         world::register_method(ctx, "RunService", name, method);
     }
@@ -1398,6 +1563,22 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         "RotationType",
     ] {
         world::register_keyed_setter(ctx, property, client_setting_setter);
+        world::register_keyed_getter(ctx, property, client_setting_getter);
+    }
+    for (name, method) in [
+        ("GetCameraYInvertValue", game_settings_int as world::Method),
+        ("GetDefaultFramerateCap", game_settings_cap),
+        ("GetOnboardingCompleted", game_settings_true),
+        ("GetTutorialState", game_settings_true),
+        ("InFullScreen", game_settings_fullscreen),
+        ("InStudioMode", game_settings_false),
+        ("ResetOnboardingCompleted", game_settings_noop),
+        ("SetCameraYInvertVisible", game_settings_noop),
+        ("SetGamepadCameraSensitivityVisible", game_settings_noop),
+        ("SetOnboardingCompleted", game_settings_noop),
+        ("SetTutorialState", game_settings_noop),
+    ] {
+        world::register_method(ctx, "UserGameSettings", name, method);
     }
     let weak = std::rc::Rc::downgrade(ctx);
     lua.globals().set(

@@ -5,27 +5,65 @@ pub(crate) fn from_wire(class: &str, key: &str, value: &Value) -> Result<Option<
     match (class, key) {
         (_, "archivable") => value.as_bool().map(|v| Some(json!(v)))
             .ok_or_else(|| "received archivable must be a boolean".into()),
-        (_, "Color3uint8") if is_part(class) => {
-            let color = value
-                .get("$color3")
-                .and_then(Value::as_array)
-                .ok_or("received Color3uint8 must be a tagged Color3")?;
-            if color.len() != 3 {
-                return Err("received Color3uint8 must be a tagged Color3".into());
-            }
-            for component in color {
-                let Some(number) = component.as_f64() else {
-                    return Err("received Color3uint8 must be a tagged Color3".into());
-                };
-                if !number.is_finite() || !(0.0..=1.0).contains(&number) {
-                    return Err("received Color3uint8 component is out of range".into());
-                }
-            }
-            Ok(Some(value.clone()))
-        }
+        (_, "Color3uint8") if is_part(class) => Ok(Some(color3uint8(value)?)),
         (_, "CollisionGroupReplicate") if is_part(class) => Ok(Some(collision_group(value)?)),
         _ => Ok(None),
     }
+}
+
+/// Decode the wire `Color3uint8` into a tagged Color3. The canonical encoding
+/// is `{$color3:[r,g,b]}` with 0..1 floats, but the compact/ISR paths can hand
+/// over a bare triple or a 0..255 byte triple. Normalise all of them.
+fn color3uint8(value: &Value) -> Result<Value, String> {
+    // Null means the stream omitted the color; keep it null and let the
+    // constructor default resolve it at read time.
+    if value.is_null() {
+        return Ok(Value::Null);
+    }
+    let err = format!("received Color3uint8 must be a tagged Color3 (got {value})");
+    let body = if let Some(tagged) = value.get("$color3") {
+        tagged
+    } else if value.is_array() || value.get("r").is_some() {
+        value
+    } else {
+        return Err(err.clone());
+    };
+    let raw: Vec<&Value> = match body {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(map) => {
+            let mut out = Vec::with_capacity(3);
+            for key in ["r", "g", "b"] {
+                out.push(map.get(key).ok_or_else(|| err.clone())?);
+            }
+            out
+        }
+        _ => return Err(err.into()),
+    };
+    if raw.len() != 3 {
+        return Err(err.clone());
+    }
+    let mut out = [0f64; 3];
+    let mut byte_scale = false;
+    for (i, item) in raw.iter().enumerate() {
+        let number = item.as_f64().ok_or_else(|| err.clone())?;
+        if !number.is_finite() {
+            return Err("received Color3uint8 component is out of range".into());
+        }
+        if number > 1.0 {
+            byte_scale = true;
+        }
+        out[i] = number;
+    }
+    let limit = if byte_scale { 255.0 } else { 1.0 };
+    for number in &mut out {
+        if !(0.0..=limit).contains(number) {
+            return Err("received Color3uint8 component is out of range".into());
+        }
+        if byte_scale {
+            *number /= 255.0;
+        }
+    }
+    Ok(json!({"$color3": [out[0], out[1], out[2]]}))
 }
 
 fn collision_group(value: &Value) -> Result<Value, String> {

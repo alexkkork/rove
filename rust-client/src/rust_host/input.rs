@@ -64,6 +64,20 @@ struct InputState {
     playback_last_error: String,
     playback_owned: BTreeMap<String, Contact>,
     playback_owned_gui_pointer: Option<String>,
+    /// Latest world pick under the virtual cursor, refreshed on move/click so
+    /// PlayerMouse.Target/Hit and VirtualUser clicks stay coherent.
+    mouse_pick: Option<MousePick>,
+    /// Mirrors VirtualUser:CaptureController so subsequent synthetic mouse
+    /// input is attributed to a captured controller.
+    controller_captured: bool,
+}
+
+#[derive(Clone)]
+struct MousePick {
+    target: String,
+    position: [f64; 3],
+    normal: [f64; 3],
+    distance: f64,
 }
 
 #[derive(Clone, Default)]
@@ -2136,6 +2150,427 @@ fn stop_playback(lua: &Lua, ctx: &WorldRef, id: &str, completed: bool) -> mlua::
     state.playback_duration = 0.0;
     Ok(())
 }
+/// Refresh the cached world pick beneath the virtual cursor. Uses the live
+/// CurrentCamera ray so PlayerMouse.Target/Hit and VirtualUser clicks agree.
+fn refresh_mouse_pick(lua: &Lua, ctx: &WorldRef) {
+    let Some(camera) = super::camera::current_camera(ctx) else {
+        state(lua).map(|s| s.borrow_mut().mouse_pick = None).ok();
+        return;
+    };
+    let Some(workspace) = ctx.borrow().services.get("Workspace").cloned() else {
+        return;
+    };
+    let mouse = {
+        let s = state(lua).map(|s| s.borrow().mouse);
+        match s {
+            Ok(m) => m,
+            Err(_) => return,
+        }
+    };
+    let point = [mouse[0] as f64, mouse[1] as f64];
+    let Ok((origin, direction)) =
+        super::camera::screen_ray(lua, ctx, &camera, point, false)
+    else {
+        state(lua).map(|s| s.borrow_mut().mouse_pick = None).ok();
+        return;
+    };
+    let exclude = vec![];
+    let pick = super::geometry::pick_ray(ctx, &workspace, origin, direction, 5_000., &exclude)
+        .ok()
+        .flatten();
+    let mut s = match state(lua) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut s = s.borrow_mut();
+    s.mouse_pick = pick.map(|p| MousePick {
+        target: p.id,
+        position: [
+            origin[0] + direction[0] * p.distance,
+            origin[1] + direction[1] * p.distance,
+            origin[2] + direction[2] * p.distance,
+        ],
+        normal: p.normal,
+        distance: p.distance,
+    });
+}
+
+/// Fire the nearest enabled ProximityPrompt or ClickDetector on the picked
+/// model (or the picked part itself) beneath the virtual cursor.
+fn fire_prompt_under_cursor(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
+    let (target, distance) = {
+        let s = state(lua)?;
+        let s = s.borrow();
+        match &s.mouse_pick {
+            Some(p) => (p.target.clone(), p.distance),
+            None => return Ok(()),
+        }
+    };
+    // Walk up from the hit part looking for a prompt/detector, bounded.
+    let mut cur = Some(target);
+    let mut depth = 0;
+    while let Some(node) = cur {
+        if depth > 8 {
+            break;
+        }
+        depth += 1;
+        let children = world::children(ctx, &node);
+        let mut prompt = None;
+        let mut detector = None;
+        for child in children {
+            if prompt.is_none() && world::is_a(ctx, &child, "ProximityPrompt") {
+                prompt = Some(child);
+            } else if detector.is_none() && world::is_a(ctx, &child, "ClickDetector") {
+                detector = Some(child);
+            }
+        }
+        if let Some(prompt) = prompt {
+            let enabled = world::get_property(ctx, &prompt, "Enabled")
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let reach = world::get_property(ctx, &prompt, "MaxActivationDistance")
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(10.);
+            if enabled && distance <= reach {
+                return super::interactions::trigger_local_prompt(lua, ctx, &prompt);
+            }
+        }
+        if let Some(detector) = detector {
+            let reach = world::get_property(ctx, &detector, "MaxActivationDistance")
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(32.);
+            if distance <= reach {
+                return super::interactions::click_local_detector(lua, ctx, &detector);
+            }
+        }
+        cur = ctx.borrow().nodes.get(&node).and_then(|n| n.parent.clone());
+    }
+    Ok(())
+}
+
+/// PlayerMouse read-only properties, resolved from the latest virtual pick.
+fn player_mouse_getter(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    key: &str,
+) -> mlua::Result<Option<Value>> {
+    if !world::is_a(ctx, id, "PlayerMouse") {
+        return Ok(None);
+    }
+    let (mouse, pick, caps) = {
+        let s = state(lua)?;
+        let s = s.borrow();
+        (s.mouse, s.mouse_pick.clone(), s.capabilities.clone())
+    };
+    let viewport = super::camera::current_camera(ctx)
+        .map(|c| super::camera::viewport_size(ctx, &c))
+        .unwrap_or([0., 0.]);
+    let enabled = caps.get("MouseEnabled").copied().unwrap_or(false);
+    let value = match key {
+        "X" => json!(mouse[0] as f64),
+        "Y" => json!(mouse[1] as f64),
+        "ViewSizeX" => json!(viewport[0]),
+        "ViewSizeY" => json!(viewport[1]),
+        "Hit" | "hit" => {
+            if !enabled {
+                return Ok(Some(super::values::from_json(lua, &mouse_frame([0.; 3]))?));
+            }
+            let position = pick.as_ref().map(|p| p.position).unwrap_or([0.; 3]);
+            mouse_frame(position)
+        }
+        "Origin" => {
+            let Some(camera) = super::camera::current_camera(ctx) else {
+                return Ok(Some(super::values::from_json(lua, &mouse_frame([0.; 3]))?));
+            };
+            match super::camera::screen_ray(
+                lua,
+                ctx,
+                &camera,
+                [mouse[0] as f64, mouse[1] as f64],
+                false,
+            ) {
+                Ok((origin, _)) => mouse_frame(origin),
+                Err(_) => mouse_frame([0.; 3]),
+            }
+        }
+        "UnitRay" => {
+            let Some(camera) = super::camera::current_camera(ctx) else {
+                return Ok(Some(Value::Nil));
+            };
+            match super::camera::screen_ray(
+                lua,
+                ctx,
+                &camera,
+                [mouse[0] as f64, mouse[1] as f64],
+                false,
+            ) {
+                Ok((origin, direction)) => {
+                    json!({"$ray":[origin, direction]})
+                }
+                Err(_) => return Ok(Some(Value::Nil)),
+            }
+        }
+        "Target" | "target" => match pick.filter(|_| enabled) {
+            Some(p) => json!({"$ref": p.target}),
+            None => Json::Null,
+        },
+        "TargetSurface" => {
+            let (name, value) = match pick.filter(|_| enabled) {
+                Some(p) => {
+                    let name = surface_normal_name(p.normal);
+                    let value = match name {
+                        "Right" => 0,
+                        "Top" => 1,
+                        "Back" => 2,
+                        "Left" => 3,
+                        "Bottom" => 4,
+                        _ => 5,
+                    };
+                    (name, value)
+                }
+                None => ("Top", 1),
+            };
+            json!({"$enum":{"type":"NormalId","name":name,"value":value}})
+        }
+        _ => return Ok(None),
+    };
+    super::values::from_json(lua, &value).map(Some)
+}
+
+fn mouse_frame(position: [f64; 3]) -> Json {
+    json!({"$cframe":{"position":position,"rotation":[1.,0.,0., 0.,1.,0., 0.,0.,1.]}})
+}
+
+fn surface_normal_name(normal: [f64; 3]) -> &'static str {
+    if normal[1].abs() > 0.5 {
+        if normal[1] > 0. { "Top" } else { "Bottom" }
+    } else if normal[0].abs() > normal[2].abs() {
+        if normal[0] > 0. { "Right" } else { "Left" }
+    } else if normal[2] > 0. { "Back" } else { "Front" }
+}
+
+fn read_vector2(value: &Value, name: &str) -> mlua::Result<[f64; 2]> {
+    let Value::UserData(data) = value else {
+        return Err(mlua::Error::RuntimeError(format!("{name} must be a Vector2")));
+    };
+    let Ok(v) = data.borrow::<super::numeric::Vector2>() else {
+        return Err(mlua::Error::RuntimeError(format!("{name} must be a Vector2")));
+    };
+    if !v.x.is_finite() || !v.y.is_finite() {
+        return Err(mlua::Error::RuntimeError(format!("{name} must be finite")));
+    }
+    Ok([v.x, v.y])
+}
+
+fn mouse_origin(value: Option<&Value>, fallback: [f32; 2]) -> [f64; 2] {
+    match value {
+        Some(Value::UserData(data)) => data
+            .borrow::<super::numeric::Vector2>()
+            .map(|v| [v.x, v.y])
+            .unwrap_or([fallback[0] as f64, fallback[1] as f64]),
+        _ => [fallback[0] as f64, fallback[1] as f64],
+    }
+}
+
+/// Emit a synthetic mouse press/release pair through the normal input path.
+fn vu_mouse(
+    lua: &Lua,
+    ctx: &WorldRef,
+    button: i64,
+    down: bool,
+    origin: [f64; 2],
+) -> mlua::Result<()> {
+    {
+        let s = state(lua)?;
+        let mut s = s.borrow_mut();
+        s.mouse = [origin[0] as f32, origin[1] as f32];
+    }
+    refresh_mouse_pick(lua, ctx);
+    let payload = json!({"events":[{
+        "phase": if down {"begin"} else {"end"},
+        "input_type": format!("MouseButton{}", button + 1),
+        "position": [origin[0], origin[1], 0.],
+        "delta": [0.,0.,0.],
+        "mouse_location": [origin[0], origin[1]],
+    }]});
+    virtual_action(lua, ctx, &payload)
+}
+
+fn virtual_action(lua: &Lua, ctx: &WorldRef, payload: &Json) -> mlua::Result<()> {
+    let old_caps;
+    let old_preferred;
+    {
+        let s = state(lua)?;
+        let mut s = s.borrow_mut();
+        old_caps = s.capabilities.clone();
+        old_preferred = s.preferred.clone();
+        for key in ["KeyboardEnabled", "MouseEnabled", "TouchEnabled"] {
+            s.capabilities.insert(key.into(), true);
+        }
+    }
+    let result = action_with_origin(lua, ctx, payload, true);
+    {
+        let s = state(lua)?;
+        let mut s = s.borrow_mut();
+        s.capabilities = old_caps;
+        s.preferred = old_preferred;
+    }
+    result
+}
+
+fn virtual_user_method(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    args: MultiValue,
+    method: &str,
+) -> mlua::Result<MultiValue> {
+    if !world::is_a(ctx, id, "VirtualUser") {
+        return Err(mlua::Error::RuntimeError(
+            "live VirtualUser receiver required".into(),
+        ));
+    }
+    let args: Vec<Value> = args.into_iter().collect();
+    let stored = state(lua)?.borrow().mouse;
+    match method {
+        "CaptureController" => {
+            state(lua)?.borrow_mut().controller_captured = true;
+        }
+        "Button1Down" | "Button1Up" | "Button2Down" | "Button2Up" => {
+            if args.len() > 2 {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "{method} expects a position and optional camera"
+                )));
+            }
+            let origin = mouse_origin(args.first(), stored);
+            let button = if method.starts_with("Button2") { 1 } else { 0 };
+            let down = method.ends_with("Down");
+            vu_mouse(lua, ctx, button, down, origin)?;
+        }
+        "ClickButton1" | "ClickButton2" => {
+            if args.len() > 2 {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "{method} expects a position and optional camera"
+                )));
+            }
+            let origin = mouse_origin(args.first(), stored);
+            let button = if method == "ClickButton2" { 1 } else { 0 };
+            vu_mouse(lua, ctx, button, true, origin)?;
+            vu_mouse(lua, ctx, button, false, origin)?;
+            if button == 0 {
+                // A click also opens the pointed-at ProximityPrompt, matching
+                // the engine's default prompt key binding.
+                fire_prompt_under_cursor(lua, ctx)?;
+            }
+        }
+        "MoveMouse" => {
+            if args.len() > 2 {
+                return Err(mlua::Error::RuntimeError(
+                    "MoveMouse expects a position and optional camera".into(),
+                ));
+            }
+            let origin = mouse_origin(args.first(), stored);
+            {
+                let s = state(lua)?;
+                s.borrow_mut().mouse = [origin[0] as f32, origin[1] as f32];
+            }
+            refresh_mouse_pick(lua, ctx);
+            let payload = json!({"events":[{
+                "phase":"change",
+                "input_type":"MouseMovement",
+                "position":[origin[0], origin[1], 0.],
+                "delta":[origin[0] - stored[0] as f64, origin[1] - stored[1] as f64, 0.],
+                "mouse_location":[origin[0], origin[1]],
+            }]});
+            virtual_action(lua, ctx, &payload)?;
+        }
+        "TypeKey" | "SetKeyDown" | "SetKeyUp" => {
+            if args.len() != 1 {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "{method} expects one key name"
+                )));
+            }
+            let Value::String(key) = &args[0] else {
+                return Err(mlua::Error::RuntimeError(
+                    "key must be a string KeyCode name".into(),
+                ));
+            };
+            let key = key.to_str()?.to_string();
+            if key.is_empty() || key == "Unknown" {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "unknown key code {key:?}"
+                )));
+            }
+            let manager = ctx
+                .borrow()
+                .services
+                .get("VirtualInputManager")
+                .cloned()
+                .unwrap_or_default();
+            if method == "TypeKey" {
+                // TypeKey inserts literal text at the focused TextBox.
+                if world::is_a(ctx, &manager, "VirtualInputManager") {
+                    let mut a = MultiValue::new();
+                    a.push_back(Value::String(lua.create_string(&key)?));
+                    virtual_method(lua, ctx, &manager, a, "SendTextInputCharacterEvent")?;
+                }
+                return Ok(MultiValue::new());
+            }
+            if !world::is_a(ctx, &manager, "VirtualInputManager") {
+                return Err(mlua::Error::RuntimeError(
+                    "VirtualInputManager service required".into(),
+                ));
+            }
+            let down = method == "SetKeyDown";
+            let mut a = MultiValue::new();
+            a.push_back(Value::Boolean(down));
+            a.push_back(Value::UserData(super::enums::enum_item(
+                lua, "KeyCode", &key,
+            )?));
+            a.push_back(Value::Boolean(false));
+            virtual_method(lua, ctx, &manager, a, "SendKeyEvent")?;
+        }
+        "StartRecording" => {
+            let manager = ctx
+                .borrow()
+                .services
+                .get("VirtualInputManager")
+                .cloned()
+                .unwrap_or_default();
+            if world::is_a(ctx, &manager, "VirtualInputManager") {
+                virtual_tape_method(lua, ctx, &manager, MultiValue::new(), "StartRecording")?;
+            }
+        }
+        "StopRecording" => {
+            let manager = ctx
+                .borrow()
+                .services
+                .get("VirtualInputManager")
+                .cloned()
+                .unwrap_or_default();
+            if world::is_a(ctx, &manager, "VirtualInputManager") {
+                return virtual_tape_method(
+                    lua,
+                    ctx,
+                    &manager,
+                    MultiValue::new(),
+                    "StopRecording",
+                );
+            }
+        }
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "unsupported VirtualUser method".into(),
+            ))
+        }
+    }
+    Ok(MultiValue::new())
+}
+
 fn virtual_tape_method(
     lua: &Lua,
     ctx: &WorldRef,
@@ -3052,6 +3487,49 @@ fn dispatch_context_actions(
     Ok(())
 }
 
+fn vu_capture(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "CaptureController")
+}
+fn vu_b1down(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "Button1Down")
+}
+fn vu_b1up(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "Button1Up")
+}
+fn vu_b2down(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "Button2Down")
+}
+fn vu_b2up(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "Button2Up")
+}
+fn vu_click1(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "ClickButton1")
+}
+fn vu_click2(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "ClickButton2")
+}
+fn vu_move(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "MoveMouse")
+}
+fn vu_type_key(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "TypeKey")
+}
+fn vu_key_down(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "SetKeyDown")
+}
+fn vu_key_up(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "SetKeyUp")
+}
+fn vu_start_recording(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "StartRecording")
+}
+fn vu_stop_recording(lua: &Lua, c: &WorldRef, i: &str, a: MultiValue) -> mlua::Result<MultiValue> {
+    virtual_user_method(lua, c, i, a, "StopRecording")
+}
+fn mouse_property(lua: &Lua, c: &WorldRef, i: &str, k: &str) -> mlua::Result<Option<Value>> {
+    player_mouse_getter(lua, c, i, k)
+}
+
 pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     let mut initial = InputState::default();
     // This runtime has no implicit device probe. Treat capabilities absent
@@ -3156,6 +3634,38 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         ("SendTextInputCharacterEvent", vim_text),
     ] {
         world::register_method(ctx, "VirtualInputManager", name, func);
+    }
+    for (name, func) in [
+        ("CaptureController", vu_capture as world::Method),
+        ("Button1Down", vu_b1down),
+        ("Button1Up", vu_b1up),
+        ("Button2Down", vu_b2down),
+        ("Button2Up", vu_b2up),
+        ("ClickButton1", vu_click1),
+        ("ClickButton2", vu_click2),
+        ("MoveMouse", vu_move),
+        ("TypeKey", vu_type_key),
+        ("SetKeyDown", vu_key_down),
+        ("SetKeyUp", vu_key_up),
+        ("StartRecording", vu_start_recording),
+        ("StopRecording", vu_stop_recording),
+    ] {
+        world::register_method(ctx, "VirtualUser", name, func);
+    }
+    for key in [
+        "Hit",
+        "hit",
+        "Target",
+        "target",
+        "Origin",
+        "UnitRay",
+        "TargetSurface",
+        "X",
+        "Y",
+        "ViewSizeX",
+        "ViewSizeY",
+    ] {
+        world::register_keyed_getter(ctx, key, mouse_property);
     }
     for (name, func) in [
         ("StartRecording", vim_record_start as world::Method),

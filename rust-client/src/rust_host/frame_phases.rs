@@ -91,6 +91,7 @@ pub(crate) fn step(
     observe(lua, "derived_properties", stage);
     let stage = Instant::now();
     fire(&["PostSimulation", "Heartbeat", "PreRender", "RenderStepped"])?;
+    super::render_steps::replay(lua, elapsed)?;
     observe(lua, "post_signals", stage);
     let stage = Instant::now();
     let mut result = scheduler::step(

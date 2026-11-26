@@ -1401,3 +1401,16 @@ fn local_part_mass_defaults_are_typed_modifiable_and_resettable() {
         .to_string()
         .contains("unavailable in snapshot"));
 }
+
+#[test]
+fn input_binding_client_defaults_resolve_without_replicated_values() {
+    let lua = Lua::new();
+    let world = fixture();
+    super::world::install(&lua, &world).unwrap();
+    let binding = crate::rust_host::world::create_instance(&lua, &world, "InputBinding", None).unwrap();
+    let id = crate::rust_host::world::instance_id(&binding).unwrap();
+    let scale = crate::rust_host::world::get_property(&world, &id, "Vector2Scale").unwrap();
+    assert_eq!(scale["$vector2"][0], 1.0);
+    let threshold = crate::rust_host::world::get_property(&world, &id, "PressedThreshold").unwrap();
+    assert_eq!(threshold.as_f64(), Some(0.5));
+}
