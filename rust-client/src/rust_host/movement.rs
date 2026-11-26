@@ -73,6 +73,14 @@ fn vector(value: &Value, label: &str) -> mlua::Result<[f64; 3]> {
         _ => Err(err(format!("{label} expects a Vector3"))),
     }
 }
+pub(super) fn json_identity_rotation() -> Json {
+    Json::Array(
+        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            .into_iter()
+            .map(Json::from)
+            .collect(),
+    )
+}
 pub(super) fn cframe_from_json(value: &Json) -> mlua::Result<CFrameValue> {
     let raw = value
         .get("$cframe")
@@ -81,10 +89,24 @@ pub(super) fn cframe_from_json(value: &Json) -> mlua::Result<CFrameValue> {
         .get("position")
         .and_then(Json::as_array)
         .ok_or_else(|| err("CFrame position is unavailable in snapshot"))?;
-    let r = raw
-        .get("rotation")
-        .and_then(Json::as_array)
-        .ok_or_else(|| err("CFrame rotation is unavailable in snapshot"))?;
+    let r = match raw.get("rotation").and_then(Json::as_array) {
+        Some(r) => r,
+        None => {
+            // Wire shorthand: rotation_id 2 = identity, 0 = axis-aligned with
+            // a packed 6-byte representation.
+            let id = raw
+                .get("rotation_id")
+                .and_then(Json::as_u64)
+                .ok_or_else(|| err("CFrame rotation is unavailable in snapshot"))?;
+            if id != 2 {
+                return Err(err("CFrame rotated shorthand is unsupported"));
+            }
+            return Ok(CFrameValue::new(
+                [p[0].as_f64().unwrap_or(0.0), p[1].as_f64().unwrap_or(0.0), p[2].as_f64().unwrap_or(0.0)],
+                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            ));
+        }
+    };
     if p.len() != 3 || r.len() != 9 {
         return Err(err("CFrame transform has invalid dimensions"));
     }

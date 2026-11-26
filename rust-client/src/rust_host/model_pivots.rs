@@ -244,7 +244,20 @@ fn world_pivot(ctx: &WorldRef, id: &str, ids: Option<&[String]>) -> mlua::Result
                 .as_ref()
                 .is_some_and(|p| p.property("WorldPivot").ok().flatten().is_some());
         if !known {
-            return Err(err("model WorldPivot is unavailable in the snapshot"));
+            // Streaming models often omit WorldPivot and PrimaryPart. Use
+            // the PrimaryPart when present, otherwise the geometric bounds
+            // of the model's parts, which is what the engine does for an
+            // automatic pivot.
+            let primary = primary(ctx, id)?;
+            if let Some(part) = primary {
+                return frame(ctx, &part, "CFrame");
+            }
+            drop(w);
+            let owned = descendants(ctx, id)?;
+            if !owned.is_empty() {
+                return Ok(bounds(ctx, &owned, Frame::identity())?.0);
+            }
+            return Err(err("model pivot is unavailable in the snapshot"));
         }
         drop(w);
         return frame(ctx, id, "WorldPivot");
