@@ -778,17 +778,40 @@ fn received_snapshot_cached(
     let surfaces = cached_surfaces
         .map(<[Aabb]>::to_vec)
         .unwrap_or_else(|| received_surfaces(view, class_parents));
+    if std::env::var_os("ROVE_TERRAIN_TRACE").is_some() {
+        eprintln!("SNAP surfaces={} cached={}", surfaces.len(), cached_surfaces.is_some());
+    }
     // Gravity keeps the body slightly above the surface while falling; accept
     // a small gap so jumps from a settled stance work. Larger XZ overlap is
     // also allowed for edge landings.
+    // A body that starts embedded in geometry (spawn inside terrain) is lifted
+    // to the surface top so the stepper starts supported instead of sinking.
+    let mut position = position;
+    for bounds in &surfaces {
+        let inside = (0..3).all(|axis| {
+            position[axis] + half_size[axis] > bounds.minimum[axis]
+                && position[axis] - half_size[axis] < bounds.maximum[axis]
+        });
+        if inside {
+            let top = bounds.maximum[1] + half_size[1];
+            if position[1] < top {
+                position[1] = top;
+            }
+        }
+    }
     let grounded = surfaces.iter().any(|bounds| {
         let gap = position[1] - half_size[1] - bounds.maximum[1];
-        gap.abs() <= 0.35
-            && gap >= -0.35
-            && [0, 2].into_iter().all(|axis| {
-                position[axis] + half_size[axis] > bounds.minimum[axis]
-                    && position[axis] - half_size[axis] < bounds.maximum[axis]
-            })
+        let overlaps = [0, 2].into_iter().all(|axis| {
+            position[axis] + half_size[axis] > bounds.minimum[axis]
+                && position[axis] - half_size[axis] < bounds.maximum[axis]
+        });
+        if !overlaps {
+            return false;
+        }
+        // Standing on the surface, or sunk into it (spawned inside terrain).
+        (gap.abs() <= 0.35 && gap >= -0.35)
+            || (position[1] + half_size[1] > bounds.minimum[1]
+                && position[1] - half_size[1] < bounds.maximum[1])
     });
     let assembly = received_reference(view.get_property(&root, "AssemblyRootPart"));
     Some(ReceivedPhysicsSnapshot {
@@ -837,7 +860,34 @@ fn received_snapshot_cached(
 
 fn received_surfaces(view: &WorldView, parents: &HashMap<String, String>) -> Vec<Aabb> {
     let mut surfaces = Vec::new();
+    let trace = std::env::var_os("ROVE_TERRAIN_TRACE").is_some();
     view.for_each_node(|node| {
+        if trace {
+            eprintln!("SURF_CLASS {}", node.class_name());
+        }
+        // Terrain is the ground on most places and is not a BasePart; model it
+        // as one huge unrotated box so bodies land instead of falling through.
+        if node.class_name() == "Terrain" {
+            if std::env::var_os("ROVE_TERRAIN_TRACE").is_some() {
+                eprintln!("TERRAIN_NODE id={} size={:?}", node.id(), node.property("Size").or_else(|| received::property(view, node.id(), "Size")));
+            }
+            if surfaces.len() < 65_536 {
+                if let Some(size) = received_vector(
+                    node.property("Size")
+                        .or_else(|| received::property(view, node.id(), "Size")),
+                )
+                .or_else(|| Some([2048., 512., 2048.]))
+                {
+                    if let Ok(bounds) = Aabb::new(
+                        std::array::from_fn(|i| -size[i] / 2.),
+                        std::array::from_fn(|i| size[i] / 2.),
+                    ) {
+                        surfaces.push(bounds);
+                    }
+                }
+            }
+            return;
+        }
         let mut class = node.class_name();
         for _ in 0..64 {
             if class == "BasePart" {
@@ -1380,6 +1430,9 @@ impl LocalPrediction {
                 Some(&self.geometry)
             },
         ) else {
+            if std::env::var_os("ROVE_TERRAIN_TRACE").is_some() {
+                eprintln!("NOPHYS player={} char={:?}", view.class_name(player_id).unwrap_or("?"), view.get_property(player_id, "Character"));
+            }
             self.simulator = None;
             self.frame = None;
             self.last_received_pose = None;

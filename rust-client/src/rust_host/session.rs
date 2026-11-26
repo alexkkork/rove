@@ -542,20 +542,55 @@ impl Vm {
 
     /// Character position used by the far-node pruner, without allocating.
     fn own_position(&self) -> Option<[f64; 3]> {
-        let player = self
+        let trace = std::env::var_os("ROVE_PRUNE_TRACE").is_some();
+        let Some(player) = self
             .world
             .borrow()
             .snapshot
-            .get("local_player")?
-            .as_str()?
-            .to_owned();
+            .get("local_player")
+            .and_then(Json::as_str)
+            .map(str::to_owned)
+        else {
+            if trace { eprintln!("PRUNE no-local-player"); }
+            return None;
+        };
         let player = player.as_str();
-        let character = super::world::get_property(&self.world, player, "Character").ok()?;
-        let character = character.get("$ref")?.as_str()?;
-        let root = super::world::children(&self.world, character)
-            .into_iter()
-            .find(|child| super::world::is_a(&self.world, child, "HumanoidRootPart"))?;
-        let cframe = super::world::get_property(&self.world, &root, "CFrame").ok()?;
+        let character = super::world::get_property(&self.world, player, "Character")
+            .ok()
+            .and_then(|v| v.get("$ref").and_then(Json::as_str).map(str::to_owned));
+        let character = match character {
+            Some(character) => character,
+            None => {
+                // Streaming servers publish the model before the Player ref.
+                let workspace = self.world.borrow().services.get("Workspace")?.clone();
+                super::world::children(&self.world, &workspace)
+                    .into_iter()
+                    .find(|child| {
+                        self.world
+                            .borrow()
+                            .nodes
+                            .get(child)
+                            .is_some_and(|n| n.class_name == "Model" && n.name == player)
+                    })?
+            }
+        };
+        // Prefer the root part, then any part of the rig (custom names), then
+        // the model pivot for rigs assembled later in the stream.
+        let children = super::world::children(&self.world, &character);
+        let root = children
+            .iter()
+            .find(|child| super::world::is_a(&self.world, child, "HumanoidRootPart"))
+            .or_else(|| children.iter().find(|child| super::world::is_a(&self.world, child, "BasePart")))
+            .cloned();
+        let Some(root) = root else {
+            if trace { eprintln!("PRUNE no-root char={character}"); }
+            return None;
+        };
+        let cframe = super::world::get_property(&self.world, &root, "CFrame");
+        let Ok(cframe) = cframe else {
+            if trace { eprintln!("PRUNE no-cframe root={root}"); }
+            return None;
+        };
         let p = cframe.get("$cframe")?.get("position")?.as_array()?;
         Some([p[0].as_f64()?, p[1].as_f64()?, p[2].as_f64()?])
     }
@@ -572,6 +607,7 @@ impl Vm {
         self.last_prune = now;
         let Some(origin) = self.own_position() else { return };
         let pruned = self.world.borrow_mut().nodes.prune_far(Some(origin), KEEP_RADIUS, PER_CALL);
+
         self.nodes_pruned += pruned as u64;
     }
 

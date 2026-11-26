@@ -297,6 +297,7 @@ impl Runtime {
             "host_stage_timings",
             "frame_stage_timings",
             "actor_stage_timings",
+            "far_nodes_pruned",
         ] {
             if let Some(value) = response.get(key) {
                 // Keep a compact diagnostic view; full actor/source catalogs

@@ -151,7 +151,7 @@ impl NodeMap {
         let candidates: Vec<String> = self
             .records
             .iter()
-            .filter(|entry| entry.peek_node().is_none_or(is_prunable_part))
+            .filter(|entry| entry.peek_node().is_some_and(is_prunable_part))
             .filter(|entry| {
                 entry.peek_node().and_then(node_position).is_some_and(|p| {
                     let dx = p[0] - origin[0];
@@ -613,19 +613,27 @@ fn is_prunable_part(node: &super::Node) -> bool {
     if !node.server_owned || node.class_name != "Part" {
         return false;
     }
-    let Some(projected) = node.projected.as_ref() else {
-        return false;
+    let has = |key: &str| {
+        node.properties.contains_key(key)
+            || node
+                .projected
+                .as_ref()
+                .is_some_and(|p| p.property(key).ok().flatten().is_some())
     };
-    projected.property("Size").ok().flatten().is_some()
-        && projected.property("CFrame").ok().flatten().is_some()
+    has("Size") && has("CFrame")
 }
 
 /// World-space position of a part, from its received/override CFrame.
 fn node_position(node: &super::Node) -> Option<[f64; 3]> {
+    let projected = node
+        .projected
+        .as_ref()
+        .and_then(|p| p.property("CFrame").ok().flatten());
     let cframe = node
         .local_overrides
         .get("CFrame")
-        .or_else(|| node.properties.get("CFrame"))?;
+        .or_else(|| node.properties.get("CFrame"))
+        .or(projected.as_ref())?;
     let p = cframe.get("$cframe")?.get("position")?.as_array()?;
     Some([
         p.first()?.as_f64()?,

@@ -205,34 +205,46 @@ impl NodeEntry {
         let Some(node) = self.node.get() else {
             return;
         };
-        let Some(projected) = node.projected.as_ref() else {
-            return;
-        };
-        if node.destroyed
-            || !node.properties.is_empty()
+        // Plain snapshots keep properties inline (no projected record), so the
+        // pristine check below still applies; only the stored copy differs.
+        let projected = node.projected.clone();
+        // `node.take()` discards the wrapper's own property map, so every
+        // property it holds must also live in the shared record.
+        let properties_safe = node
+            .properties
+            .iter()
+            .all(|(key, value)| projected.as_ref().is_some_and(|p| {
+                p.property(key).ok().flatten().is_some_and(|shared| shared == *value)
+            }));
+        if !properties_safe
+            || node.destroyed
             || !node.local_overrides.is_empty()
             || !node.attributes.is_empty()
             || !node.revisions.is_empty()
             || !node.collection_tags.is_empty()
             || node.local_revision != 0
-            || node.id != projected.id()
-            || node.class_name != projected.class_name()
-            || node.name
-                != projected
-                    .name()
-                    .unwrap_or_else(|_| projected.class_name().to_owned())
-            || node.parent
-                != match projected.parent() {
-                    ReadOnlyField::Value(value) => Some(value.to_owned()),
-                    ReadOnlyField::Missing | ReadOnlyField::Null => None,
-                }
+            || projected.as_ref().is_some_and(|projected| {
+                node.id != projected.id()
+                    || node.class_name != projected.class_name()
+                    || node.name
+                        != projected
+                            .name()
+                            .unwrap_or_else(|_| projected.class_name().to_owned())
+                    || node.parent
+                        != match projected.parent() {
+                            ReadOnlyField::Value(value) => Some(value.to_owned()),
+                            ReadOnlyField::Missing | ReadOnlyField::Null => None,
+                        }
+            })
         {
             return;
         }
         self.flags = (u8::from(node.server_owned) << 1)
             | (u8::from(node.attributes_known) << 2)
             | (u8::from(node.collection_tags_known) << 3);
-        self.projected = Some(projected.clone());
-        self.node.take();
+        if let Some(projected) = projected {
+            self.projected = Some(projected);
+            self.node.take();
+        }
     }
 }
