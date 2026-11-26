@@ -1,8 +1,12 @@
-local v = Instance.new("Vector3Value")
-local out = {}
-local function t(n, f) local r=table.pack(pcall(f)) out[#out+1]=n.."="..tostring(r[1]).." "..typeof(r[2])..":"..tostring(r[2]):sub(1,50) end
-t("nan", function() v.Value = Vector3.new(0/0, 1, 1) return v.Value end)
-t("nanText", function() return tostring(v.Value) end)
-t("inf", function() v.Value = Vector3.new(math.huge, 0, 0) return v.Value end)
-t("readback", function() return v.Value.X end)
-return table.concat(out, "\n")
+task.wait(6)
+local mod = require(game:GetService("ReplicatedStorage").BrickBattle.Attributes)
+local n, bad = 0, 0
+local sample
+for _, d in ipairs(workspace:GetDescendants()) do
+  if d:IsA("BasePart") then
+    n += 1
+    local ok, v = pcall(function() return mod.getAttribute(d, "IsLunging") end)
+    if not ok then bad += 1; sample = sample or (d:GetFullName().." "..tostring(v):sub(1,90)) end
+  end
+end
+return "n="..n.." bad="..bad.." "..tostring(sample)

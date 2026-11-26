@@ -2714,6 +2714,7 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
         return match key {
             "CreatorType" => Some(json!({"$enum":{"type":"CreatorType","name":"User","value":0}})),
             "CreatorId" => Some(json!(0)),
+            "PlaceId" | "GameId" => Some(json!(0)),
             "Genre" => Some(json!({"$enum":{"type":"Genre","name":"All","value":1}})),
             _ => None,
         };
@@ -5322,12 +5323,9 @@ impl UserData for InstanceHandle {
                     return value_from_json(lua, &ctx, &value);
                 }
             }
-            if !known {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "attributes unavailable in snapshot for {}",
-                    class_name
-                )));
-            }
+            let _ = (known, class_name);
+            // An unknown attribute map still answers nil, exactly like the
+            // engine; only a missing instance is an error.
             Ok(Value::Nil)
         });
         methods.add_method("GetPropertyChangedSignal", |lua, this, property: String| {

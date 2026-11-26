@@ -216,7 +216,8 @@ impl NodeEntry {
             .all(|(key, value)| projected.as_ref().is_some_and(|p| {
                 p.property(key).ok().flatten().is_some_and(|shared| shared == *value)
             }));
-        if !properties_safe
+        if !node.attributes_known
+            || !properties_safe
             || node.destroyed
             || !node.local_overrides.is_empty()
             || !node.attributes.is_empty()

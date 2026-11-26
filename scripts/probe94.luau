@@ -1,15 +1,17 @@
-local rs = game:GetService("RunService")
-local out = {}
-local function check(d)
-  if d.Name:sub(1,10) ~= "$Attribute" or not d:IsA("Vector3Value") then return end
-  local ok, v = pcall(function() return d.Value end)
-  if not ok or v == nil then
-    out[#out+1] = d:GetFullName().." ok="..tostring(ok).." v="..tostring(v).." kids="..(#d:GetChildren())
-    local raw = d:GetAttributes()
-    local ks = {}
-    for k in pairs(raw) do ks[#ks+1]=k end
-    out[#out+1] = " attrs="..table.concat(ks,",")
+task.wait(6)
+local bad = 0
+local n = 0
+local samples = {}
+for _, d in ipairs(workspace:GetDescendants()) do
+  if d:IsA("BasePart") then
+    n += 1
+    local ok, v = pcall(function() return d:GetAttribute("IsLunging") end)
+    if not ok and #samples < 3 then
+      local attrs = {}
+      for k in pairs(d:GetAttributes()) do attrs[#attrs+1] = k end
+      samples[#samples+1] = d:GetFullName().." attrs="..table.concat(attrs, ",")
+    end
+    if not ok then bad += 1 end
   end
 end
-for _, d in ipairs(workspace:GetDescendants()) do check(d) end
-return table.concat(out, "\n")
+return "n="..n.." bad="..bad.."\n"..table.concat(samples, "\n")
