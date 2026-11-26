@@ -687,6 +687,50 @@ WrapLayerDebugMode|None=0,BoundCage=1,LayerCage=2,BoundCageAndLinks=3,Reference=
 WrapTargetDebugMode|None=0,TargetCageOriginal=1,TargetCageCompressed=2,TargetCageInterface=3,TargetLayerCageOriginal=4,TargetLayerCageCompressed=5,TargetLayerInterface=6,Rbf=7,OuterCageDetail=8,PreWrapDeformerCage=9
 "#;
 
+/// `(name, value)` pairs for one enum, if the catalog knows it.
+pub(crate) fn catalog_items(name: &str) -> Option<Vec<(String, i32)>> {
+    catalog()
+        .get(name)
+        .map(|items| items.iter().map(|i| (i.name.clone(), i.value)).collect())
+}
+
+/// Canonical enum name for a class property from the pinned API dump.
+pub(crate) fn property_enum_name(class: &str, key: &str) -> Option<String> {
+    static NAMES: std::sync::OnceLock<std::collections::BTreeMap<String, String>> =
+        std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            let Ok(text) = std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../vendor/roblox-player-scripts-745/API-Dump.json"
+            )) else {
+                return Default::default();
+            };
+            let Ok(dump) = serde_json::from_str::<Json>(&text) else {
+                return Default::default();
+            };
+            let mut map = std::collections::BTreeMap::new();
+            for class in dump["Classes"].as_array().into_iter().flatten() {
+                let name = class["Name"].as_str().unwrap_or_default();
+                for member in class["Members"].as_array().into_iter().flatten() {
+                    let Some(enum_name) = member
+                        .pointer("/ValueType/Name")
+                        .and_then(Json::as_str)
+                        .filter(|_| member.pointer("/ValueType/Category").and_then(Json::as_str) == Some("Enum"))
+                    else {
+                        continue;
+                    };
+                    if let Some(property) = member["Name"].as_str() {
+                        map.insert(format!("{name}.{property}"), enum_name.to_owned());
+                    }
+                }
+            }
+            map
+        })
+        .get(&format!("{class}.{key}"))
+        .cloned()
+}
+
 fn catalog() -> &'static BTreeMap<String, Vec<Item>> {
     static CATALOG: OnceLock<BTreeMap<String, Vec<Item>>> = OnceLock::new();
     CATALOG.get_or_init(|| {

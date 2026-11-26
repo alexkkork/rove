@@ -1642,6 +1642,10 @@ fn worker(
     report["error"] = json!(failure);
     report["client_environment_challenges_received"] = json!(program_requests);
     report["client_environment_auth"] = auth.summary();
+    report["client_version"] = serde_json::json!({
+        "version": crate::client_version::current_version(),
+        "user_agent": crate::client_version::user_agent(),
+    });
     report["asset_encryption"] = serde_json::json!({
         "key_seeded": crate::asset_crypto::has_any_key(),
         "registered_assets": crate::asset_crypto::encrypted_assets().len(),

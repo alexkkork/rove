@@ -230,9 +230,14 @@ impl RobloxSession {
                     format!(".ROBLOSECURITY={}", self.cookie.expose()),
                 ),
                 ("Accept".into(), "application/json".into()),
-                ("User-Agent".into(), "LocalRobloxResearch/1.0".into()),
+                // gamejoin rejects unknown agents with status 12 ("Game 211"),
+                // so claim the live desktop client identity on every call.
+                ("User-Agent".into(), crate::client_version::user_agent()),
                 ("Origin".into(), "https://www.roblox.com".into()),
                 ("Referer".into(), "https://www.roblox.com/".into()),
+                // Present on real client traffic; some endpoints key off them.
+                ("Accept-Language".into(), "en-US,en;q=0.9".into()),
+                ("Roblox-Browser-Asset-Request".into(), "false".into()),
             ];
             if body.is_some() {
                 headers.push(("Content-Type".into(), "application/json".into()));
@@ -832,10 +837,21 @@ pub fn request_allocation_until_ready(
     attempt_id: &str,
     expected_user_id: u64,
 ) -> Result<AllocationResult, SessionError> {
+    let mut refreshed_version = false;
     for attempt in 0..8 {
         let result = request_allocation(session, target, invite, attempt_id, expected_user_id)?;
         if matches!(result, AllocationResult::Pending { .. }) && attempt < 7 {
             std::thread::sleep(Duration::from_secs(3));
+            continue;
+        }
+        // Status 12 without a message is gamejoin's "unknown agent" refusal.
+        // A stale version is the common cause, so refetch once and retry.
+        if !refreshed_version
+            && matches!(result, AllocationResult::Rejected { status: Some(12), .. })
+            && attempt < 7
+        {
+            refreshed_version = true;
+            crate::client_version::invalidate();
             continue;
         }
         return Ok(result);

@@ -1,6 +1,8 @@
 //! Keep hash-table growth small and cache bounded repeated hierarchy reads.
 
 use super::Node;
+use rove_client_core::world::ReadOnlyField;
+use serde_json::Value;
 #[path = "world_node_entry.rs"]
 mod world_node_entry;
 use hashbrown::{hash_table, HashTable};

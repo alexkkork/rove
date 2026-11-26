@@ -1634,8 +1634,11 @@ pub(super) fn fire_attribute_changed(
 
 /// Value-holder class the engine uses to expose an attribute as a child.
 fn attribute_child_class(value: &Json) -> Option<&'static str> {
+    // Vector2 attributes are exposed as a Vector3Value with z = 0. Client code
+    // (Roblox's own GridPosition consumer) reads `.Z` and only branches on
+    // Vector3Value/NumberValue holders.
     if value.get("$vector2").is_some() {
-        return Some("Vector2Value");
+        return Some("Vector3Value");
     }
     if value.get("$vector3").is_some() {
         return Some("Vector3Value");
@@ -2532,6 +2535,14 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
     if let Some(projected) = &node.projected {
         let received = projected.property(key).map_err(mlua::Error::RuntimeError)?;
         if let Some(value) = received {
+            // Wire enums are bare integers; scripts index `.Name`/`.Value`.
+            if let Some(number) = value.as_i64() {
+                if enum_property(world, &node.class_name, key) {
+                    if let Some(item) = enum_item_for(&node.class_name, key, number) {
+                        return Ok(item);
+                    }
+                }
+            }
             return Ok(value);
         }
         // An omitted pivot offset on a completed received creation keeps its
@@ -2611,6 +2622,13 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
         )));
     }
     if let Some(value) = node.properties.get(key) {
+        if let Some(number) = value.as_i64() {
+            if enum_property(world, &node.class_name, key) {
+                if let Some(item) = enum_item_for(&node.class_name, key, number) {
+                    return Ok(item);
+                }
+            }
+        }
         return Ok(value.clone());
     }
     if let Some(wire_key) = super::world_aliases::wire_key(&node.class_name, key) {
@@ -2682,15 +2700,20 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
     // InputBinding is client-built by PlayerModule; replicated copies omit
     // most defaults (scale vectors, thresholds, enum directions).
     if class == "InputBinding" {
+        if std::env::var_os("ROVE_ENUM_TRACE").is_some() {
+            eprintln!("IB_DEFAULT {key}");
+        }
         return input_binding_default(key);
     }
     if class == "Player" {
         return match key {
-            "Neutral" => Some(json!(true)),
             "Team" | "ReplicationFocus" => Some(Json::Null),
             "TeamColor" => Some(json!({"$brickcolor":194})),
-            "ReplicationFocus" => Some(Json::Null),
             "HasVerifiedBadge" => Some(json!(false)),
+            "LocaleId" => Some(json!("en-us")),
+            "MembershipType" => Some(json!({"$enum":{"type":"MembershipType","name":"None","value":0}})),
+            "AccountAge" => Some(json!(0)),
+            "IsUnder13" | "Neutral" => Some(json!(true)),
             _ => None,
         };
     }
@@ -5295,17 +5318,31 @@ impl UserData for InstanceHandle {
         });
         methods.add_method("GetAttribute", |lua, this, name: String| {
             let ctx = this.ctx()?;
-            let (value, known, class_name) = {
+            let (value, known, class_name, shared) = {
                 let world = ctx.borrow();
                 let node = world.nodes.get(&this.id).ok_or_else(|| {
                     mlua::Error::RuntimeError("instance is not in this world".into())
                 })?;
+                let shared = node
+                    .projected
+                    .as_ref()
+                    .and_then(|p| p.raw().metadata_field("attributes", &name))
+                    .or_else(|| {
+                        match node.projected.as_ref()?.section("attributes") {
+                            Ok(rove_client_core::world::ReadOnlyField::Value(v)) => {
+                                v.get(&name).cloned()
+                            }
+                            _ => None,
+                        }
+                    });
                 (
                     node.attributes.get(&name).cloned(),
                     node.attributes_known,
                     node.class_name.clone(),
+                    shared,
                 )
             };
+            let value = value.or(shared);
             if let Some(value) = value {
                 return value_from_json(lua, &ctx, &value);
             }
@@ -5466,6 +5503,28 @@ fn materialize_snapshot_attributes(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()
         sync_attribute_child(lua, ctx, &id, &name, Some(&value))?;
     }
     Ok(())
+}
+
+/// True when the class declares this property as an Enum in the schema.
+fn enum_property(world: &World, class: &str, key: &str) -> bool {
+    let types = &world.snapshot["class_property_types"];
+    class_chain(class).iter().any(|current| {
+        types
+            .get(current)
+            .and_then(|fields| fields.get(key))
+            .and_then(Json::as_u64)
+            == Some(18)
+    })
+}
+
+/// Resolve an enum item by the schema's enum name for `class.key`.
+fn enum_item_for(class: &str, key: &str, value: i64) -> Option<Json> {
+    let enum_name = class_chain(class)
+        .iter()
+        .find_map(|current| super::enums::property_enum_name(current, key))?;
+    let items = super::enums::catalog_items(&enum_name)?;
+    let item = items.into_iter().find(|(_, v)| *v as i64 == value)?;
+    Some(json!({"$enum":{"type":enum_name,"name":item.0,"value":value}}))
 }
 
 fn is_signal_name(key: &str) -> bool {

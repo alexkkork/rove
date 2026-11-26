@@ -1414,3 +1414,16 @@ fn input_binding_client_defaults_resolve_without_replicated_values() {
     let threshold = crate::rust_host::world::get_property(&world, &id, "PressedThreshold").unwrap();
     assert_eq!(threshold.as_f64(), Some(0.5));
 }
+
+#[test]
+fn wire_enum_integers_decode_to_enum_items() {
+    let snapshot = json!({"version":1,"sequence":1,"nodes":[
+        {"id":"game","class_name":"DataModel","name":"game","parent":null,"properties":{}},
+        {"id":"b","class_name":"InputBinding","name":"B","parent":"game","server_owned":true,
+         "properties":{"KeyCode":1005}}
+    ],"class_property_types":{"InputBinding":{"KeyCode":18}}});
+    let world: WorldRef = Rc::new(RefCell::new(World::from_snapshot(&snapshot, None).unwrap()));
+    let value = get_property(&world, "b", "KeyCode").unwrap();
+    assert_eq!(value.pointer("/$enum/type").and_then(Json::as_str), Some("KeyCode"));
+    assert_eq!(value.pointer("/$enum/name").and_then(Json::as_str), Some("ButtonL1"));
+}
