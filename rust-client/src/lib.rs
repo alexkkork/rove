@@ -5,6 +5,7 @@ pub(crate) const EXECUTOR_VERSION: &str = "1.00";
 pub const EXECUTOR_USER_AGENT: &str = "rove 1.00";
 pub mod account_auth;
 pub mod allocation;
+pub mod asset_crypto;
 mod animation_queue;
 pub mod bytecode_format;
 pub mod capture_replay;

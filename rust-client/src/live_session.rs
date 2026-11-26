@@ -1642,6 +1642,11 @@ fn worker(
     report["error"] = json!(failure);
     report["client_environment_challenges_received"] = json!(program_requests);
     report["client_environment_auth"] = auth.summary();
+    report["asset_encryption"] = serde_json::json!({
+        "key_seeded": crate::asset_crypto::has_any_key(),
+        "registered_assets": crate::asset_crypto::encrypted_assets().len(),
+        "decrypt_failures": crate::asset_crypto::failures().len(),
+    });
     report["server_feature_count"] = json!(feature_count);
     report["unhandled_game_packets"] = json!(unhandled);
     report["packets_discarded_after_stop"] = json!(discarded);
@@ -1749,6 +1754,61 @@ fn receive_failure_metadata(application: u8, channel: u32, error: &TransportErro
 
 /// Run a bounded Rust receive session using only this fresh HTTPS allocation.
 /// This is deliberately separate from the older Python script console.
+/// Pick up encryption material from the issued join payload. `RandomSeed1/2`
+/// (inside SessionId) are 32-byte AES-256 seeds; if present they become the
+/// session default so registered assets decrypt without extra calls.
+fn seed_asset_keys(issued: &IssuedJoinAllocation) {
+    use base64::Engine;
+    let mut seeds: Vec<Vec<u8>> = Vec::new();
+    let decode = |text: &str| -> Option<Vec<u8>> {
+        let trimmed = text.trim().trim_end_matches('=');
+        if trimmed.is_empty() {
+            return None;
+        }
+        // Re-pad to a multiple of four; the engine rejects short padding.
+        let mut padded = trimmed.to_owned();
+        while padded.len() % 4 != 0 {
+            padded.push('=');
+        }
+        base64::engine::general_purpose::STANDARD
+            .decode(padded.as_bytes())
+            .ok()
+    };
+    let mut take = |text: &str| {
+        if let Some(raw) = decode(text) {
+            if matches!(raw.len(), 16 | 24 | 32 | 64) && !seeds.contains(&raw) {
+                seeds.push(raw);
+            }
+        }
+    };
+    if let Some(obj) = issued.game_join_fields.as_object() {
+        if let Some(seed) = obj.get("RandomSeed1").and_then(serde_json::Value::as_str) {
+            take(seed);
+        }
+        if let Some(session) = obj.get("SessionId").and_then(serde_json::Value::as_str) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(session) {
+                if let Some(seed) = parsed.get("RandomSeed2").and_then(serde_json::Value::as_str) {
+                    take(seed);
+                }
+            }
+        }
+    }
+    if std::env::var_os("ROVE_DUMP_JOIN").is_some() {
+        eprintln!("SEED_COUNT {}", seeds.len());
+    }
+    for seed in seeds {
+        let hex: String = seed.iter().map(|byte| format!("{byte:02x}")).collect();
+        match crate::asset_crypto::register_default(&hex) {
+            Ok(()) => {}
+            Err(error) => {
+                if std::env::var_os("ROVE_DUMP_JOIN").is_some() {
+                    eprintln!("SEED_REJECT {}", error.code());
+                }
+            }
+        }
+    }
+}
+
 pub fn run(issued: &IssuedJoinAllocation, seconds: u64) -> Result<Value, String> {
     run_with_runtime(issued, seconds, None)
 }
@@ -1786,6 +1846,8 @@ pub fn run_with_options(
             }
         }
     }
+    // Seed any encryption material the join carried before the first fetch.
+    seed_asset_keys(issued);
     let allocation = live_transport_allocation(issued)?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let trust = PublicTrust::from_files(

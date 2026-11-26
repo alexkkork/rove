@@ -963,6 +963,12 @@ macro_rules! localization_wrapper {
     };
 }
 localization_wrapper!(loc_translator, "GetTranslatorForPlayer");
+localization_wrapper!(loc_corescript, "GetCorescriptLocalizations");
+localization_wrapper!(loc_entries, "GetTableEntries");
+localization_wrapper!(loc_loading, "GetIsLoadingInternalTranslations");
+localization_wrapper!(loc_scrape, "StartTextScraper");
+localization_wrapper!(loc_locale, "SetRobloxLocaleId");
+localization_wrapper!(translator_roblox, "RobloxOnlyTranslate");
 localization_wrapper!(loc_translator_async, "GetTranslatorForPlayerAsync");
 localization_wrapper!(translator_translate, "Translate");
 localization_wrapper!(translator_format, "FormatByKey");
@@ -1234,7 +1240,8 @@ run_info_wrapper!(run_noop, "Pause");
 
 /// Local service surface for the remaining startup services. They report the
 /// already-known local session facts without making network requests.
-fn misc_service(lua: &Lua, ctx: &WorldRef, id: &str, method: &str, _args: MultiValue) -> mlua::Result<MultiValue> {
+fn misc_service(lua: &Lua, ctx: &WorldRef, id: &str, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    let values: Vec<Value> = args.into_iter().collect();
     let class = ctx
         .borrow()
         .nodes
@@ -1261,21 +1268,108 @@ fn misc_service(lua: &Lua, ctx: &WorldRef, id: &str, method: &str, _args: MultiV
         }
         ("ReplicatedFirst", "RemoveDefaultLoadingScreen" | "SetDefaultLoadingGuiRemoved") => {}
         ("ContentProvider", "Preload" | "PreloadAsync") => {}
-        ("ContentProvider", "GetFailedRequests" | "GetDetailedFailedRequests"
-        | "ListEncryptedAssets" | "GetDependencyContentIds") => {
+        ("ContentProvider", "ListEncryptedAssets") => {
+            let table = lua.create_table()?;
+            for (index, id) in crate::asset_crypto::encrypted_assets().into_iter().enumerate() {
+                table.set(index + 1, lua.create_string(format!("rbxassetid://{id}"))?)?;
+            }
+            out.push_back(Value::Table(table));
+        }
+        ("ContentProvider", "GetFailedRequests") => {
+            // Only decryption failures are tracked locally; the engine reports
+            // these as asset ids so a retry loop can act on them.
+            let table = lua.create_table()?;
+            for (index, (id, _why)) in crate::asset_crypto::failures().into_iter().enumerate() {
+                table.set(index + 1, lua.create_string(format!("rbxassetid://{id}"))?)?;
+            }
+            out.push_back(Value::Table(table));
+        }
+        ("ContentProvider", "GetDetailedFailedRequests") => {
+            let table = lua.create_table()?;
+            for (index, (id, why)) in crate::asset_crypto::failures().into_iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("requestId", format!("rbxassetid://{id}"))?;
+                row.set("statusCode", 0)?;
+                row.set("message", why)?;
+                table.set(index + 1, row)?;
+            }
+            out.push_back(Value::Table(table));
+        }
+        ("ContentProvider", "GetDependencyContentIds") => {
             out.push_back(Value::Table(lua.create_table()?))
         }
-        ("ContentProvider", "RegisterDefaultEncryptionKey"
-        | "RegisterDefaultSessionKey"
-        | "RegisterEncryptedAsset"
-        | "RegisterSessionEncryptedAsset"
-        | "UnregisterDefaultEncryptionKey"
-        | "UnregisterEncryptedAsset"
-        | "SetBaseUrl") => {}
-        ("ContentProvider", "GetAssetFetchStatus") => out.push_back(Value::Integer(0)),
+        ("ContentProvider", "RegisterDefaultEncryptionKey") => {
+            // Same spelling as RegisterEncryptedAsset but session-wide.
+            let text = text_arg(&values, 0, "encryption key")?;
+            crate::asset_crypto::register_default(&text)
+                .map_err(|e| mlua::Error::RuntimeError(e.code().into()))?;
+        }
+        ("ContentProvider", "RegisterSessionEncryptedAsset") => {
+            let id = asset_id_arg(&values, 0)?;
+            let text = text_arg(&values, 1, "session key")?;
+            crate::asset_crypto::register_asset(id, &text)
+                .map_err(|e| mlua::Error::RuntimeError(e.code().into()))?;
+        }
+        ("ContentProvider", "RegisterEncryptedAsset") => {
+            let id = asset_id_arg(&values, 0)?;
+            let text = text_arg(&values, 1, "encryption key")?;
+            crate::asset_crypto::register_asset(id, &text)
+                .map_err(|e| mlua::Error::RuntimeError(e.code().into()))?;
+        }
+        ("ContentProvider", "UnregisterDefaultEncryptionKey") => {
+            crate::asset_crypto::clear_default()
+        }
+        ("ContentProvider", "UnregisterEncryptedAsset") => {
+            crate::asset_crypto::unregister_asset(asset_id_arg(&values, 0)?)
+        }
+        ("ContentProvider", "SetBaseUrl") => {}
+        ("ContentProvider", "GetAssetFetchStatus") => {
+            // 0 = not fetched, 1 = decrypted successfully, 2 = failed.
+            let status = match asset_id_arg(&values, 0) {
+                Ok(id) if crate::asset_crypto::failures().iter().any(|(f, _)| *f == id) => 2,
+                Ok(_) => 1,
+                Err(_) => 0,
+            };
+            out.push_back(Value::Integer(status));
+        }
         _ => return Err(expected(&class, method)),
     }
     Ok(out)
+}
+
+/// Text argument at `index`, trimmed and bounded.
+fn text_arg(values: &[Value], index: usize, what: &str) -> mlua::Result<String> {
+    let Some(Value::String(text)) = values.get(index) else {
+        return Err(mlua::Error::RuntimeError(format!(
+            "{what} must be a string"
+        )));
+    };
+    Ok(text.to_str()?.to_string())
+}
+
+/// Asset id from either `rbxassetid://N`, a URL, or a bare number/string.
+fn asset_id_arg(values: &[Value], index: usize) -> mlua::Result<u64> {
+    let id = match values.get(index) {
+        Some(Value::Integer(v)) if *v > 0 => *v as u64,
+        Some(Value::Number(v)) if *v > 0.0 && v.fract() == 0.0 => *v as u64,
+        Some(Value::String(text)) => {
+            let text = text.to_str()?;
+            let digits = text
+                .trim()
+                .trim_start_matches("rbxassetid://")
+                .rsplit(['/', '='])
+                .next()
+                .unwrap_or("");
+            digits
+                .parse::<u64>()
+                .map_err(|_| mlua::Error::RuntimeError("invalid asset id".into()))?
+        }
+        _ => return Err(mlua::Error::RuntimeError("asset id required".into())),
+    };
+    if id == 0 {
+        return Err(mlua::Error::RuntimeError("asset id required".into()));
+    }
+    Ok(id)
 }
 
 macro_rules! misc_wrapper {
@@ -1296,6 +1390,13 @@ misc_wrapper!(content_preload_async, "PreloadAsync");
 misc_wrapper!(content_failed, "GetFailedRequests");
 misc_wrapper!(content_failed_detailed, "GetDetailedFailedRequests");
 misc_wrapper!(content_status, "GetAssetFetchStatus");
+misc_wrapper!(content_register_default, "RegisterDefaultEncryptionKey");
+misc_wrapper!(content_register_session_asset, "RegisterSessionEncryptedAsset");
+misc_wrapper!(content_register_asset, "RegisterEncryptedAsset");
+misc_wrapper!(content_unregister_default, "UnregisterDefaultEncryptionKey");
+misc_wrapper!(content_unregister_asset, "UnregisterEncryptedAsset");
+misc_wrapper!(content_list_encrypted, "ListEncryptedAssets");
+misc_wrapper!(content_set_base_url, "SetBaseUrl");
 
 fn ensure_user_settings(lua: &Lua, ctx: &WorldRef) -> mlua::Result<String> {
     if let Some(id) = ctx.borrow().services.get("UserSettings").cloned() {
@@ -1634,12 +1735,18 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     for (name, method) in [
         ("GetTranslatorForPlayer", loc_translator as world::Method),
         ("GetTranslatorForPlayerAsync", loc_translator_async),
+        ("GetCorescriptLocalizations", loc_corescript),
+        ("GetTableEntries", loc_entries),
+        ("GetIsLoadingInternalTranslations", loc_loading),
+        ("StartTextScraper", loc_scrape),
+        ("SetRobloxLocaleId", loc_locale),
     ] {
         world::register_method(ctx, "LocalizationService", name, method);
     }
     for (name, method) in [
         ("Translate", translator_translate as world::Method),
         ("FormatByKey", translator_format),
+        ("RobloxOnlyTranslate", translator_roblox),
     ] {
         world::register_method(ctx, "Translator", name, method);
     }
@@ -1699,6 +1806,13 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         ("GetFailedRequests", content_failed),
         ("GetDetailedFailedRequests", content_failed_detailed),
         ("GetAssetFetchStatus", content_status),
+        ("RegisterDefaultEncryptionKey", content_register_default),
+        ("RegisterSessionEncryptedAsset", content_register_session_asset),
+        ("RegisterEncryptedAsset", content_register_asset),
+        ("UnregisterDefaultEncryptionKey", content_unregister_default),
+        ("UnregisterEncryptedAsset", content_unregister_asset),
+        ("ListEncryptedAssets", content_list_encrypted),
+        ("SetBaseUrl", content_set_base_url),
     ] {
         world::register_method(ctx, "ContentProvider", name, method);
     }

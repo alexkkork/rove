@@ -463,3 +463,24 @@ fn collection_membership_is_silent_for_detached_tags_and_rejected_transactions()
     collection_pump(&lua,&sched);
     assert_eq!(lua.load("return table.concat(events,',')").eval::<String>().unwrap(),"+detached");
 }
+
+#[test]
+fn localization_service_returns_a_translator_and_passes_text_through() {
+    let snapshot = json!({"version":1,"sequence":0,"services":{"LocalizationService":"loc"},"nodes":[
+        {"id":"game","class_name":"DataModel","name":"game","parent":null,"properties":{},"server_owned":true},
+        {"id":"loc","class_name":"LocalizationService","name":"LocalizationService","parent":"game","properties":{},"server_owned":true}
+    ]});
+    let world = Rc::new(RefCell::new(World::from_snapshot(&snapshot, None).unwrap()));
+    let lua = Lua::new();
+    crate::rust_host::install_bindings(&lua, &world).unwrap();
+    let out: (String, String) = lua
+        .load(r#"
+            local ls = game:GetService('LocalizationService')
+            local t = ls:GetTranslatorForPlayer(nil)
+            return t.ClassName, t:Translate('hello')
+        "#)
+        .eval()
+        .unwrap();
+    assert_eq!(out.0, "Translator");
+    assert_eq!(out.1, "hello");
+}

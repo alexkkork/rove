@@ -165,6 +165,8 @@ struct Vm {
     last_step: Instant,
     memory_limit: usize,
     actor_io: super::actor_io::ActorIoRouter,
+    last_prune: Instant,
+    nodes_pruned: u64,
 }
 
 impl Drop for Vm {
@@ -239,6 +241,8 @@ impl Vm {
             stage_timings: BTreeMap::new(),
             memory_limit: memory as usize * 1024 * 1024,
             actor_io: super::actor_io::ActorIoRouter::default(),
+            last_prune: Instant::now(),
+            nodes_pruned: 0,
         })
     }
 
@@ -535,8 +539,44 @@ impl Vm {
         Ok(response)
     }
 
+    /// Character position used by the far-node pruner, without allocating.
+    fn own_position(&self) -> Option<[f64; 3]> {
+        let player = self
+            .world
+            .borrow()
+            .snapshot
+            .get("local_player")?
+            .as_str()?
+            .to_owned();
+        let player = player.as_str();
+        let character = super::world::get_property(&self.world, player, "Character").ok()?;
+        let character = character.get("$ref")?.as_str()?;
+        let root = super::world::children(&self.world, character)
+            .into_iter()
+            .find(|child| super::world::is_a(&self.world, child, "HumanoidRootPart"))?;
+        let cframe = super::world::get_property(&self.world, &root, "CFrame").ok()?;
+        let p = cframe.get("$cframe")?.get("position")?.as_array()?;
+        Some([p[0].as_f64()?, p[1].as_f64()?, p[2].as_f64()?])
+    }
+
+    /// Release pristine far parts back to their shared records. Runs on a slow
+    /// cadence with a bounded budget so a frame never stalls.
+    fn prune_far_nodes(&mut self) {
+        const KEEP_RADIUS: f64 = 512.;
+        const PER_CALL: usize = 512;
+        let now = Instant::now();
+        if now.duration_since(self.last_prune) < Duration::from_millis(500) {
+            return;
+        }
+        self.last_prune = now;
+        let Some(origin) = self.own_position() else { return };
+        let pruned = self.world.borrow_mut().nodes.prune_far(Some(origin), KEEP_RADIUS, PER_CALL);
+        self.nodes_pruned += pruned as u64;
+    }
+
     fn pump(&mut self, budget: u64, received_changes: &[&Json]) -> Result<Json, String> {
         self.reserve_root_memory()?;
+        self.prune_far_nodes();
         let total_budget = Duration::from_millis(budget);
         let has_actor_vm = super::actors::has_planned_vm(&self.lua, &self.world);
         let (root_frame_budget, actor_budget) = split_pump_budget(total_budget, has_actor_vm);

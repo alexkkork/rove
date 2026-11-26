@@ -194,4 +194,45 @@ impl NodeEntry {
     pub fn peek_node(&self) -> Option<&Node> {
         self.node.get().map(Box::as_ref)
     }
+    /// True when the wrapper is already just its shared record.
+    pub fn is_stub(&self) -> bool {
+        self.node.get().is_none() && self.projected.is_some()
+    }
+    /// Drop a pristine far node back to its shared record. Anything the script
+    /// layer may have touched (local overrides, attributes, revisions, tags,
+    /// lifecycle flags) keeps the full wrapper.
+    pub fn prune_if_pristine(&mut self) {
+        let Some(node) = self.node.get() else {
+            return;
+        };
+        let Some(projected) = node.projected.as_ref() else {
+            return;
+        };
+        if node.destroyed
+            || !node.properties.is_empty()
+            || !node.local_overrides.is_empty()
+            || !node.attributes.is_empty()
+            || !node.revisions.is_empty()
+            || !node.collection_tags.is_empty()
+            || node.local_revision != 0
+            || node.id != projected.id()
+            || node.class_name != projected.class_name()
+            || node.name
+                != projected
+                    .name()
+                    .unwrap_or_else(|_| projected.class_name().to_owned())
+            || node.parent
+                != match projected.parent() {
+                    ReadOnlyField::Value(value) => Some(value.to_owned()),
+                    ReadOnlyField::Missing | ReadOnlyField::Null => None,
+                }
+        {
+            return;
+        }
+        self.flags = (u8::from(node.server_owned) << 1)
+            | (u8::from(node.attributes_known) << 2)
+            | (u8::from(node.collection_tags_known) << 3);
+        self.projected = Some(projected.clone());
+        self.node.take();
+    }
 }

@@ -26,6 +26,7 @@ pub enum AssetError {
     InvalidDelivery,
     InvalidRedirect,
     DownloadFailed,
+    DecryptFailed(&'static str),
     DecodeFailed(&'static str),
 }
 impl AssetError {
@@ -44,7 +45,12 @@ impl AssetError {
                 Self::InvalidDelivery => "invalid_animation_delivery",
                 Self::InvalidRedirect => "unsupported_animation_redirect",
                 Self::DownloadFailed => "animation_download_failed",
-                Self::Http(_) | Self::DecodeFailed(_) => unreachable!(),
+                Self::DecryptFailed(reason) => match *reason {
+                    "tag" => "animation_asset_decrypt_tag_mismatch",
+                    "malformed" => "animation_asset_payload_malformed",
+                    _ => "animation_asset_decrypt_failed",
+                },
+                Self::Http(_) | Self::DecodeFailed(_) | Self::DecryptFailed(_) => unreachable!(),
             }
             .into(),
         }
@@ -213,7 +219,12 @@ impl AnimationAssetBackend {
                 Err(_) => return Err(AssetError::DownloadFailed),
             };
             match response.status() {
-                200 => return read_bounded(response.into_reader()),
+                200 => {
+                    // Decrypt before any decoder sees the bytes. Unregistered
+                    // assets pass straight through.
+                    let raw = read_bounded(response.into_reader())?;
+                    return decrypt_registered(id, raw);
+                }
                 301 | 302 | 303 | 307 | 308 if attempt < 3 => {
                     let next = response
                         .header("Location")
@@ -229,6 +240,25 @@ impl AnimationAssetBackend {
         Err(AssetError::InvalidRedirect)
     }
 }
+/// Decrypt a downloaded payload when its asset id is registered.
+fn decrypt_registered(id: u64, raw: Vec<u8>) -> Result<Vec<u8>, AssetError> {
+    match crate::asset_crypto::decrypt_asset(id, raw) {
+        Ok((bytes, decrypted)) => {
+            crate::asset_crypto::record_fetch(id, if decrypted { "decrypted" } else { "plain" });
+            Ok(bytes)
+        }
+        Err(error) => {
+            crate::asset_crypto::record_failure(id, error.code());
+            let reason = match error {
+                crate::asset_crypto::DecryptError::TagMismatch => "tag",
+                crate::asset_crypto::DecryptError::Malformed => "malformed",
+                crate::asset_crypto::DecryptError::NotEncryptedKey => "key",
+            };
+            Err(AssetError::DecryptFailed(reason))
+        }
+    }
+}
+
 fn read_bounded(reader: impl Read) -> Result<Vec<u8>, AssetError> {
     let mut data = Vec::new();
     reader

@@ -1,0 +1,6 @@
+local rs = game:GetService("RunService")
+local ok, v = pcall(function() return rs:IsClient() end)
+local ls = game:GetService("LocalizationService")
+local ok2, v2 = pcall(function() return ls:GetCorescriptLocalizations() end)
+local ok3 = pcall(function() return ls:GetTableEntries(nil, nil) end)
+return "isclient="..tostring(ok)..":"..tostring(v).." | cores="..tostring(ok2)..":"..tostring(v2).." | entries="..tostring(ok3)

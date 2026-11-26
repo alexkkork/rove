@@ -142,6 +142,44 @@ impl NodeMap {
             });
         None
     }
+    /// Drop pristine wrappers for received parts further than `keep_radius`
+    /// (in XZ) from `origin` back to their shared record. Local overrides,
+    /// attributes, revisions and nearby geometry stay fully materialized.
+    pub fn prune_far(&mut self, origin: Option<[f64; 3]>, keep_radius: f64, budget: usize) -> usize {
+        let Some(origin) = origin else { return 0 };
+        let radius2 = keep_radius * keep_radius;
+        let candidates: Vec<String> = self
+            .records
+            .iter()
+            .filter(|entry| entry.peek_node().is_none_or(is_prunable_part))
+            .filter(|entry| {
+                entry.peek_node().and_then(node_position).is_some_and(|p| {
+                    let dx = p[0] - origin[0];
+                    let dz = p[2] - origin[2];
+                    dx * dx + dz * dz > radius2
+                })
+            })
+            .take(budget)
+            .map(|entry| entry.id().to_owned())
+            .collect();
+        let mut pruned = 0;
+        for id in candidates {
+            let hash = self.hashes.hash_one(id.as_str());
+            let Some(entry) = self
+                .records
+                .find_mut(hash, |candidate| candidate.id() == id.as_str())
+            else {
+                continue;
+            };
+            let entry = Rc::make_mut(entry);
+            if !entry.is_stub() {
+                entry.prune_if_pristine();
+                pruned += 1;
+            }
+        }
+        pruned
+    }
+
     pub fn compact_destroyed(&mut self, id: &str) {
         if let Some(entry) = self
             .records
@@ -566,4 +604,32 @@ impl<Q: ?Sized + AsRef<str>> Index<&Q> for NodeMap {
     fn index(&self, key: &Q) -> &Node {
         self.get(key.as_ref()).expect("no entry found for key")
     }
+}
+
+/// Only received plain parts with a complete shared record are prunable. The
+/// projected record has to answer `Size`/`CFrame` because the wrapper that
+/// carries them goes away.
+fn is_prunable_part(node: &super::Node) -> bool {
+    if !node.server_owned || node.class_name != "Part" {
+        return false;
+    }
+    let Some(projected) = node.projected.as_ref() else {
+        return false;
+    };
+    projected.property("Size").ok().flatten().is_some()
+        && projected.property("CFrame").ok().flatten().is_some()
+}
+
+/// World-space position of a part, from its received/override CFrame.
+fn node_position(node: &super::Node) -> Option<[f64; 3]> {
+    let cframe = node
+        .local_overrides
+        .get("CFrame")
+        .or_else(|| node.properties.get("CFrame"))?;
+    let p = cframe.get("$cframe")?.get("position")?.as_array()?;
+    Some([
+        p.first()?.as_f64()?,
+        p.get(1)?.as_f64()?,
+        p.get(2)?.as_f64()?,
+    ])
 }
