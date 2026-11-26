@@ -235,11 +235,8 @@ pub fn connect_owned(
     let hub = app_hub(lua)?;
     let mut hub = hub.borrow_mut();
     let key = (world_key(ctx), id.to_owned(), key.to_owned());
-    if hub.closed_instances.contains(&(key.0, key.1.clone())) {
-        return Err(mlua::Error::RuntimeError(
-            "cannot connect to a destroyed local instance".into(),
-        ));
-    }
+    // The engine accepts new connections on a destroyed instance; they simply
+    // may never fire. Games rely on this when re-registering handlers.
     hub.prune(lua, &key);
     let active = hub
         .signals
@@ -632,11 +629,6 @@ fn register_waiter(lua: &Lua, key: SignalKey, hub: Weak<RefCell<SignalHub>>) -> 
         .ok_or_else(|| mlua::Error::RuntimeError("local signal hub has been released".into()))?;
     {
         let mut state = hub.borrow_mut();
-        if state.closed_instances.contains(&(key.0, key.1.clone())) {
-            return Err(mlua::Error::RuntimeError(
-                "cannot wait on a destroyed local instance".into(),
-            ));
-        }
         state.prune(lua, &key);
         let active = state
             .signals
@@ -767,11 +759,6 @@ fn connect_to(
     once: bool,
 ) -> Result<ConnectionHandle> {
     let mut state = hub.borrow_mut();
-    if state.closed_instances.contains(&(key.0, key.1.clone())) {
-        return Err(mlua::Error::RuntimeError(
-            "cannot connect to a destroyed local instance".into(),
-        ));
-    }
     state.prune(lua, key);
     let active = state
         .signals

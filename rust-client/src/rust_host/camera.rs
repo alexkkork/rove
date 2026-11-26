@@ -740,6 +740,49 @@ fn set_lens(lua: &Lua, ctx: &WorldRef, id: &str, key: &str, value: Value) -> mlu
     Ok(true)
 }
 
+/// CameraSubject defaults to the local character's Humanoid once it exists;
+/// the engine always reports something for a client camera.
+fn camera_subject(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Value>> {
+    if !world::is_a(ctx, id, "Camera") {
+        return Ok(None);
+    }
+    if let Ok(value) = world::get_property(ctx, id, "CameraSubject") {
+        if !value.is_null() {
+            return values::from_json(lua, &value).map(Some);
+        }
+    }
+    let Some(player) = ctx
+        .borrow()
+        .snapshot
+        .get("local_player")
+        .and_then(Json::as_str)
+        .map(str::to_owned)
+    else {
+        return Ok(Some(Value::Nil));
+    };
+    let character = world::get_property(ctx, &player, "Character")
+        .ok()
+        .and_then(|v| v.get("$ref").and_then(Json::as_str).map(str::to_owned));
+    let Some(character) = character else {
+        return Ok(Some(Value::Nil));
+    };
+    let humanoid = world::children(ctx, &character)
+        .into_iter()
+        .find(|child| world::is_a(ctx, child, "Humanoid"));
+    if let Some(humanoid) = humanoid {
+        return world::instance(lua, ctx, &humanoid).map(Some);
+    }
+    // Before the character arrives the engine still reports a subject for a
+    // local camera; use any character Humanoid so `.Position` never nils.
+    let fallback = world::ordered_matching_ids(ctx, |class| class == "Humanoid")
+        .into_iter()
+        .next();
+    match fallback {
+        Some(humanoid) => world::instance(lua, ctx, &humanoid).map(Some),
+        None => Ok(Some(Value::Nil)),
+    }
+}
+
 pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     for key in ["CFrame", "CoordinateFrame"] {
         world::register_setter(ctx, key, |lua, ctx, id, value| {
@@ -788,6 +831,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     world::register_method(ctx, "Camera", "ScreenPointToRay", |l, c, i, a| {
         point_to_ray(l, c, i, a, true)
     });
+    world::register_getter(ctx, "CameraSubject", camera_subject);
     world::register_getter(ctx, "ViewportSize", |lua, ctx, id| {
         if !world::is_a(ctx, id, "Camera") {
             return Ok(None);

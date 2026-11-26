@@ -1715,19 +1715,27 @@ fn request_animation(store: &mut Store, ctx: &WorldRef, reference: &str) -> mlua
 }
 
 fn animation_content_reference(ctx: &WorldRef, animation: &str) -> mlua::Result<String> {
-    // AnimationContent is the current replicated storage. AnimationId remains
-    // the public legacy accessor and can exist with an empty constructor value,
-    // so fall back when it is absent, non-string, or empty.
-    ["AnimationId", "AnimationContent"]
-        .into_iter()
-        .find_map(|key| {
-            world::get_property(ctx, animation, key)
-                .ok()?
-                .as_str()
-                .filter(|value| !value.is_empty() && value.len() <= 512)
-                .map(str::to_owned)
-        })
-        .ok_or_else(|| err("Animation has no supported content reference"))
+    // AnimationContent is the current replicated storage; AnimationId is the
+    // public legacy ContentId the engine always reports. Lightweight sessions
+    // can omit the content store, so the numeric asset id gives a usable
+    // reference instead of failing the whole load.
+    if let Ok(value) = world::get_property(ctx, animation, "AnimationContent") {
+        if let Some(text) = value
+            .as_str()
+            .filter(|value| !value.is_empty() && value.len() <= 512)
+        {
+            return Ok(text.to_owned());
+        }
+    }
+    if let Ok(value) = world::get_property(ctx, animation, "AnimationId") {
+        if let Some(text) = value
+            .as_str()
+            .filter(|value| !value.is_empty() && value.len() <= 512)
+        {
+            return Ok(text.to_owned());
+        }
+    }
+    Err(err("Animation has no supported content reference"))
 }
 
 fn animator_load(

@@ -244,20 +244,17 @@ fn instance_cleanup_disconnects_callbacks_and_wakes_waiters() {
             .unwrap(),
         (false, 0, 0)
     );
+    // Connecting after cleanup is still allowed (the engine does not throw);
+    // the handler just stays dormant.
     lua.load(
         r#"
-        local ok, err = pcall(function() event:Connect(function() end) end)
-        cleanup_rejects_connection = not ok and string.find(err, "destroyed local instance") ~= nil
+        local ok = pcall(function() event:Connect(function() end) end)
+        cleanup_rejects_connection = ok
     "#,
     )
     .exec()
     .unwrap();
-    assert_eq!(
-        lua.globals()
-            .get::<bool>("cleanup_rejects_connection")
-            .unwrap(),
-        true
-    );
+    assert!(lua.globals().get::<bool>("cleanup_rejects_connection").unwrap());
 }
 
 #[test]

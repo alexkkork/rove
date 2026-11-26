@@ -1444,9 +1444,8 @@ pub fn apply_delta_with_lua(
         }
         player_events.publish(lua, ctx, action_index)?;
         collection_events.publish(lua, ctx, action_index)?;
-        attribute_events.publish(lua, ctx, action_index)?;
-        // Received attribute writes expose the same `$Attribute*` child the
-        // engine builds, so scripts walking children see the value.
+        // Materialize `$Attribute*` holders before AttributeChanged fires, so
+        // handlers already see the child and the value.
         if let Some(update) = action.get("attribute_update") {
             if let (Some(id), Some(name)) = (
                 action.get("id").and_then(Json::as_str),
@@ -1461,7 +1460,6 @@ pub fn apply_delta_with_lua(
             }
         }
         if action["kind"] == "create" {
-            // A create record can carry its attributes inline.
             if let (Some(id), Some(attrs)) = (
                 action.pointer("/node/id").and_then(Json::as_str),
                 action
@@ -1477,6 +1475,7 @@ pub fn apply_delta_with_lua(
                 }
             }
         }
+        attribute_events.publish(lua, ctx, action_index)?;
         let destroyed = hierarchy_events.publish(lua, ctx, action_index)?;
         property_events.publish(lua, ctx, action_index)?;
         health_events.publish(lua, ctx, action_index)?;
@@ -1716,22 +1715,45 @@ pub(crate) fn sync_attribute_child(
 }
 
 fn create_attribute_child(
-    lua: &Lua,
+    _lua: &Lua,
     ctx: &WorldRef,
     parent: &str,
     name: &str,
     class: &str,
     value: Json,
 ) -> mlua::Result<()> {
-    let child = create_instance(lua, ctx, class, Some(parent))?;
-    let child_id = instance_id(&child).ok_or_else(|| {
-        mlua::Error::RuntimeError("attribute holder id missing".into())
-    })?;
+    // Build the holder directly in the world so it exists synchronously:
+    // a Lua `Instance.new` round-trip can lag behind the attribute read.
     let mut world = ctx.borrow_mut();
-    if let Some(node) = world.nodes.get_mut(&child_id) {
-        node.name = name.to_owned();
-        node.local_overrides.insert("Value".into(), value);
+    if !world.nodes.get(parent).is_some_and(|n| !n.destroyed) {
+        return Ok(());
     }
+    let id = allocate_local_instance_id(&mut world)?;
+    let mut properties = JsonMap::new();
+    properties.insert("Value".into(), value);
+    let node = Node {
+        id: id.clone(),
+        class_name: class.to_owned(),
+        name: name.to_owned(),
+        parent: Some(parent.to_owned()),
+        destroyed: false,
+        server_owned: false,
+        received_creation_complete: true,
+        attributes_known: true,
+        collection_tags_known: true,
+        projected: None,
+        data: NodeData {
+            properties,
+            local_overrides: JsonMap::new(),
+            attributes: JsonMap::new(),
+            revisions: JsonMap::new(),
+            local_revision: 0,
+            collection_tags: Vec::new(),
+        }
+        .pack(),
+    };
+    world.record_order(&id);
+    world.nodes.insert(id, node);
     Ok(())
 }
 
@@ -2590,6 +2612,15 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
                         node.class_name, node.class_name
                     ))
                 });
+        }
+    }
+    // AnimationContent is the modern content property; AnimationId is the
+    // legacy ContentId accessor, so each resolves through the other.
+    if key == "AnimationId" {
+        if let Ok(value) = get_property_from_world(world, id, "AnimationContent") {
+            if value.as_str().is_some_and(|v| !v.is_empty()) {
+                return Ok(value);
+            }
         }
     }
     // `TextureId`/`TextureID` are legacy spellings of Decal.Texture and
@@ -5210,6 +5241,20 @@ impl UserData for InstanceHandle {
             };
             if let Some(value) = value {
                 return value_from_json(lua, &ctx, &value);
+            }
+            // Fall back to the `$Attribute*` holder: a delta can land the
+            // holder before the attribute map entry.
+            let child = format!("$Attribute{name}");
+            let holder = {
+                let world = ctx.borrow();
+                world
+                    .nodes
+                    .child_named(&this.id, &child, &world.node_order)
+            };
+            if let Some(holder) = holder {
+                if let Ok(value) = get_property(&ctx, &holder, "Value") {
+                    return value_from_json(lua, &ctx, &value);
+                }
             }
             if !known {
                 return Err(mlua::Error::RuntimeError(format!(

@@ -95,7 +95,7 @@ fn live(ctx: &WorldRef, id: &str) -> mlua::Result<()> {
     Ok(())
 }
 fn model(ctx: &WorldRef, id: &str) -> bool {
-    world::is_a(ctx, id, "Model")
+    world::is_a(ctx, id, "Model") || world::is_a(ctx, id, "Terrain")
 }
 fn movable(ctx: &WorldRef, id: &str) -> bool {
     model(ctx, id) || world::is_a(ctx, id, "BasePart") || world::is_a(ctx, id, "Camera")
@@ -147,6 +147,7 @@ fn primary(ctx: &WorldRef, id: &str) -> mlua::Result<Option<String>> {
             return Ok(None)
         }
         Err(_) if world::is_a(ctx, id, "Model") => return Ok(None),
+        Err(_) if world::is_a(ctx, id, "Terrain") => return Ok(None),
         Err(error) => return Err(error),
     };
     if value.is_null() {
@@ -207,6 +208,22 @@ fn bounds(ctx: &WorldRef, ids: &[String], axes: Frame) -> mlua::Result<(Frame, [
     let mut any = false;
     let inv = axes.inv();
     for id in ids {
+        // Terrain counts as one huge unrotated box for bounds purposes.
+        if world::is_a(ctx, id, "Terrain") {
+            let size = world::get_property(ctx, id, "Size")?;
+            let size = size
+                .get("$vector3")
+                .and_then(Json::as_array)
+                .filter(|v| v.len() == 3)
+                .ok_or_else(|| err("Terrain bounds require Size"))?;
+            for row in 0..3 {
+                let half = size[row].as_f64().unwrap_or(0.) / 2.;
+                low[row] = low[row].min(-half);
+                high[row] = high[row].max(half);
+            }
+            any = true;
+            continue;
+        }
         if !world::is_a(ctx, id, "BasePart") {
             continue;
         }
@@ -675,13 +692,17 @@ pub(super) fn install(ctx: &WorldRef) {
     bulk_move::install(ctx);
     attachments::install(ctx);
     world::register_method(ctx, "PVInstance", "GetPivot", get_pivot);
+    // GetOrigin is the legacy alias of GetPivot.
+    world::register_method(ctx, "PVInstance", "GetOrigin", get_pivot);
     world::register_method(ctx, "PVInstance", "PivotTo", pivot_to);
-    world::register_method(ctx, "Model", "GetBoundingBox", |lua, ctx, id, args| {
-        get_bounds(lua, ctx, id, args, false)
-    });
-    world::register_method(ctx, "Model", "GetExtentsSize", |lua, ctx, id, args| {
-        get_bounds(lua, ctx, id, args, true)
-    });
+    for class in ["Model", "Terrain"] {
+        world::register_method(ctx, class, "GetBoundingBox", |lua, ctx, id, args| {
+            get_bounds(lua, ctx, id, args, false)
+        });
+        world::register_method(ctx, class, "GetExtentsSize", |lua, ctx, id, args| {
+            get_bounds(lua, ctx, id, args, true)
+        });
+    }
     world::register_method(ctx, "Model", "TranslateBy", |lua, ctx, id, args| {
         legacy_move(lua, ctx, id, args, false)
     });

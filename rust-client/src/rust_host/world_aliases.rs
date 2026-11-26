@@ -169,7 +169,5 @@ pub(crate) fn is_lightweight_asset(key: &str) -> bool {
             | "AudioContent"
             | "Video"
             | "VideoContent"
-            | "AnimationId"
-            | "AnimationContent"
     )
 }
