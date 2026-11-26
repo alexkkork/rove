@@ -598,10 +598,12 @@ impl Vm {
     /// Release pristine far parts back to their shared records. Runs on a slow
     /// cadence with a bounded budget so a frame never stalls.
     fn prune_far_nodes(&mut self) {
-        const KEEP_RADIUS: f64 = 512.;
-        const PER_CALL: usize = 512;
+        // Roblox itself streams far geometry out; 384 studs keeps a generous
+        // gameplay bubble while still releasing the bulk of a large map.
+        const KEEP_RADIUS: f64 = 384.;
+        const PER_CALL: usize = 2048;
         let now = Instant::now();
-        if now.duration_since(self.last_prune) < Duration::from_millis(500) {
+        if now.duration_since(self.last_prune) < Duration::from_millis(250) {
             return;
         }
         self.last_prune = now;

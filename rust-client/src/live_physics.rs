@@ -778,9 +778,6 @@ fn received_snapshot_cached(
     let surfaces = cached_surfaces
         .map(<[Aabb]>::to_vec)
         .unwrap_or_else(|| received_surfaces(view, class_parents));
-    if std::env::var_os("ROVE_TERRAIN_TRACE").is_some() {
-        eprintln!("SNAP surfaces={} cached={}", surfaces.len(), cached_surfaces.is_some());
-    }
     // Gravity keeps the body slightly above the surface while falling; accept
     // a small gap so jumps from a settled stance work. Larger XZ overlap is
     // also allowed for edge landings.
@@ -860,17 +857,10 @@ fn received_snapshot_cached(
 
 fn received_surfaces(view: &WorldView, parents: &HashMap<String, String>) -> Vec<Aabb> {
     let mut surfaces = Vec::new();
-    let trace = std::env::var_os("ROVE_TERRAIN_TRACE").is_some();
     view.for_each_node(|node| {
-        if trace {
-            eprintln!("SURF_CLASS {}", node.class_name());
-        }
         // Terrain is the ground on most places and is not a BasePart; model it
         // as one huge unrotated box so bodies land instead of falling through.
         if node.class_name() == "Terrain" {
-            if std::env::var_os("ROVE_TERRAIN_TRACE").is_some() {
-                eprintln!("TERRAIN_NODE id={} size={:?}", node.id(), node.property("Size").or_else(|| received::property(view, node.id(), "Size")));
-            }
             if surfaces.len() < 65_536 {
                 if let Some(size) = received_vector(
                     node.property("Size")
@@ -1430,9 +1420,6 @@ impl LocalPrediction {
                 Some(&self.geometry)
             },
         ) else {
-            if std::env::var_os("ROVE_TERRAIN_TRACE").is_some() {
-                eprintln!("NOPHYS player={} char={:?}", view.class_name(player_id).unwrap_or("?"), view.get_property(player_id, "Character"));
-            }
             self.simulator = None;
             self.frame = None;
             self.last_received_pose = None;
