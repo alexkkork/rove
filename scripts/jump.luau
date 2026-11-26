@@ -8,11 +8,20 @@ end
 if not c then print("NOCHAR") return end
 local hrp = c.HumanoidRootPart
 local hum = c.Humanoid
-task.wait(1.0)
+-- wait until grounded (y settles) before jumping
+local last = hrp.Position.Y
+local stable = 0
+repeat
+  task.wait(0.2)
+  local now = hrp.Position.Y
+  if math.abs(now - last) < 0.01 then stable += 1 else stable = 0 end
+  last = now
+until stable >= 2
 local y0 = hrp.Position.Y
+print("GROUND-Y", string.format("%.2f", y0))
 hum.Jump = true
 local peak = 0
-for i = 1, 25 do
+for i = 1, 30 do
   task.wait(0.08)
   local rise = hrp.Position.Y - y0
   if rise > peak then peak = rise end
