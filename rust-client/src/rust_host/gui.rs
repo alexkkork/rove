@@ -2500,11 +2500,16 @@ fn set_canvas_position(
 }
 
 fn display(ctx: &WorldRef) -> Json {
-    ctx.borrow()
-        .snapshot
-        .get("display")
-        .cloned()
-        .unwrap_or_else(|| json!({"size":[0,0],"device_insets":[0,0,0,0],"core_insets":[0,0,0,0]}))
+    // Headless sessions have no renderer; fall back to a 1920x1080 viewport so
+    // absolute UI geometry stays meaningful instead of collapsing to zero.
+    match ctx.borrow().snapshot.get("display") {
+        Some(value) => value.clone(),
+        None => json!({
+            "size":[1920.0,1080.0],
+            "device_insets":[0,0,0,0],
+            "core_insets":[0,0,0,0]
+        }),
+    }
 }
 fn absolute_value(
     lua: &mlua::Lua,
