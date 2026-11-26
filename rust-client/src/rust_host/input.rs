@@ -780,6 +780,31 @@ fn action_with_origin(
             ]);
             super::signals::fire(lua, ctx, &sid, touch_signal, touch_args)?;
         }
+        if input_type == "Keyboard" {
+            // Drive the new InputAction API (Pressed/Released/StateChanged).
+            for action in
+                super::input_actions::dispatch_key(ctx, &key, state_name == "Begin", false)
+            {
+                let pressed = world::get_property(ctx, &action, "BoolState")
+                    .ok()
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                super::signals::fire(
+                    lua,
+                    ctx,
+                    &action,
+                    if pressed { "Pressed" } else { "Released" },
+                    MultiValue::new(),
+                )?;
+                super::signals::fire(
+                    lua,
+                    ctx,
+                    &action,
+                    "StateChanged",
+                    MultiValue::from_vec(vec![Value::Boolean(pressed)]),
+                )?;
+            }
+        }
         dispatch_context_actions(
             lua,
             ctx,

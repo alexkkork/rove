@@ -681,7 +681,55 @@ fn chat_send_getter(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<
 fn universe_send_getter(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Value>> {
     yielding_getter(lua, ctx, id, "SendUniverseChatMessageAsync", false)
 }
+/// Client-only TextChatService configuration properties. The runtime hosts
+/// the modern chat version and enables default commands/channels.
+fn chat_property(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    key: &str,
+) -> mlua::Result<Option<Value>> {
+    if ctx.borrow().nodes.get(id).map(|n| n.class_name.as_str()) != Some("TextChatService") {
+        return Ok(None);
+    }
+    let value = match key {
+        "ChatVersion" => json!({"$enum":{"type":"ChatVersion","name":"TextChatService","value":1}}),
+        "CreateDefaultCommands" | "CreateDefaultTextChannels" => json!(true),
+        "ChatTranslationEnabled" | "ChatTranslationFTUXShown" | "ChatTranslationToggleEnabled" => {
+            json!(false)
+        }
+        "HasSeenDeprecationDialog" | "IsLegacyChatDisabled" | "PlatformIntegratedChat" => {
+            json!(true)
+        }
+        _ => return Ok(None),
+    };
+    super::values::from_json(lua, &value).map(Some)
+}
+
+fn chat_loaded(_lua: &Lua, ctx: &WorldRef, id: &str, _args: MultiValue) -> mlua::Result<MultiValue> {
+    if ctx.borrow().nodes.get(id).map(|n| n.class_name.as_str()) != Some("TextChatService") {
+        return Err(mlua::Error::RuntimeError(
+            "ChatIsLoaded requires TextChatService".into(),
+        ));
+    }
+    Ok(MultiValue::from_vec(vec![Value::Boolean(true)]))
+}
+
 pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
+    for key in [
+        "ChatVersion",
+        "CreateDefaultCommands",
+        "CreateDefaultTextChannels",
+        "ChatTranslationEnabled",
+        "ChatTranslationFTUXShown",
+        "ChatTranslationToggleEnabled",
+        "HasSeenDeprecationDialog",
+        "IsLegacyChatDisabled",
+        "PlatformIntegratedChat",
+    ] {
+        world::register_keyed_getter(ctx, key, chat_property);
+    }
+    world::register_method(ctx, "TextChatService", "ChatIsLoaded", chat_loaded);
     let _ = state(lua)?;
     world::register_getter(ctx, "GetFamilyInfoAsync", text_family_getter);
     world::register_getter(ctx, "GetTextBoundsAsync", text_bounds_getter);

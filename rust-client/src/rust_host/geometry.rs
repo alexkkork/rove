@@ -154,19 +154,24 @@ fn read_frame(v: &Json) -> mlua::Result<CFrameValue> {
         .and_then(Json::as_array)
         .filter(|p| p.len() == 3)
         .ok_or_else(|| err("ray query part CFrame is unavailable"))?;
-    let r = v
-        .get("$cframe")
-        .and_then(|v| v.get("rotation"))
-        .and_then(Json::as_array)
-        .filter(|r| r.len() == 9)
-        .ok_or_else(|| err("ray query needs a rigid part rotation"))?;
     let mut pos = [0.; 3];
-    let mut rot = [0.; 9];
+    let mut rot = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
     for i in 0..3 {
         pos[i] = p[i].as_f64().ok_or_else(|| err("invalid CFrame"))?
     }
-    for i in 0..9 {
-        rot[i] = r[i].as_f64().ok_or_else(|| err("invalid CFrame"))?
+    // Rotation is absent for the identity shorthand (`rotation_id`); treat it
+    // as unrotated rather than failing the whole ray query.
+    match v.get("$cframe").and_then(|v| v.get("rotation")) {
+        Some(value) => {
+            let r = value
+                .as_array()
+                .filter(|r| r.len() == 9)
+                .ok_or_else(|| err("ray query needs a rigid part rotation"))?;
+            for i in 0..9 {
+                rot[i] = r[i].as_f64().ok_or_else(|| err("invalid CFrame"))?
+            }
+        }
+        None => {}
     }
     if !pos.iter().chain(rot.iter()).all(|x| x.is_finite()) {
         return Err(err("ray query needs a rigid part rotation"));
@@ -1149,8 +1154,11 @@ fn cast_ray(
             continue;
         }
         if is_terrain {
-            let data = world::get_property(ctx, &id, "CollisionGeometry")
-                .map_err(|_| err("collision geometry is unavailable for Terrain"))?;
+            // Lightweight sessions skip terrain collision download; ignore the
+            // Terrain surface for picking instead of failing the query.
+            let Ok(data) = world::get_property(ctx, &id, "CollisionGeometry") else {
+                continue;
+            };
             let hit = match data.get("kind").and_then(Json::as_str) {
                 Some("voxel_grid") => ray_voxel_grid(
                     &data,
@@ -1180,8 +1188,42 @@ fn cast_ray(
         let frame = read_frame(&world::get_property(ctx, &id, "CFrame")?)?;
         let half = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
         if world::is_a(ctx, &id, "TriangleMeshPart") {
-            let data = world::get_property(ctx, &id, "CollisionGeometry")
-                .map_err(|_| err("collision geometry is unavailable"))?;
+            // Lightweight/streamed mesh parts can arrive without collision
+            // geometry; fall through to the bounding box instead of failing.
+            let Ok(data) = world::get_property(ctx, &id, "CollisionGeometry") else {
+                let size = point(&world::get_property(ctx, &id, "Size")?)?;
+                let frame = read_frame(&world::get_property(ctx, &id, "CFrame")?)?;
+                let half = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
+                let delta = [
+                    origin[0] - frame.position[0],
+                    origin[1] - frame.position[1],
+                    origin[2] - frame.position[2],
+                ];
+                let local_o = mul_t(frame.rotation, delta);
+                let local_d = mul_t(frame.rotation, direction);
+                let Some((distance, local_normal)) =
+                    ray_primitive(local_o, local_d, half, 1, length)
+                else {
+                    continue;
+                };
+                let normal = [
+                    frame.rotation[0] * local_normal[0]
+                        + frame.rotation[1] * local_normal[1]
+                        + frame.rotation[2] * local_normal[2],
+                    frame.rotation[3] * local_normal[0]
+                        + frame.rotation[4] * local_normal[1]
+                        + frame.rotation[5] * local_normal[2],
+                    frame.rotation[6] * local_normal[0]
+                        + frame.rotation[7] * local_normal[1]
+                        + frame.rotation[8] * local_normal[2],
+                ];
+                if best.as_ref().is_none_or(|(d, ..)| distance < *d) {
+                    let material = world::get_property(ctx, &id, "Material")
+                        .map_err(|_| err("ray hit material is unavailable"))?;
+                    best = Some((distance, id, normal, material));
+                }
+                continue;
+            };
             let Some((distance, normal)) =
                 ray_mesh(ctx, &id, &data, origin, direction, length, work)?
             else {
@@ -1432,8 +1474,11 @@ fn spherecast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::
             .map(|n| n.class_name.clone())
             .unwrap_or_default();
         if is_terrain {
-            let data = world::get_property(ctx, &id, "CollisionGeometry")
-                .map_err(|_| err("collision geometry is unavailable for Terrain"))?;
+            // Lightweight sessions skip terrain collision download; ignore the
+            // Terrain surface for picking instead of failing the query.
+            let Ok(data) = world::get_property(ctx, &id, "CollisionGeometry") else {
+                continue;
+            };
             let moving = |axis| add3(origin, scale3(axis, radius));
             let contact = match data.get("kind").and_then(Json::as_str) {
                 Some("voxel_grid") => cast_voxels(
@@ -1681,8 +1726,11 @@ fn blockcast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::R
             .map(|n| n.class_name.clone())
             .unwrap_or_default();
         if is_terrain {
-            let data = world::get_property(ctx, &id, "CollisionGeometry")
-                .map_err(|_| err("collision geometry is unavailable for Terrain"))?;
+            // Lightweight sessions skip terrain collision download; ignore the
+            // Terrain surface for picking instead of failing the query.
+            let Ok(data) = world::get_property(ctx, &id, "CollisionGeometry") else {
+                continue;
+            };
             let moving_axes = axes(&frame);
             let moving = |axis| add3(frame.position, box_support(moving_axes, half, axis));
             let contact = match data.get("kind").and_then(Json::as_str) {

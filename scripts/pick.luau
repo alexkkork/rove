@@ -1,7 +1,9 @@
 local vu = game:GetService("VirtualUser")
 local lp = game:GetService("Players").LocalPlayer
 local cam = workspace.CurrentCamera
-local hrp = lp.Character:WaitForChild("HumanoidRootPart")
+local char = lp.Character or lp.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart", 30)
+print("K0 char", char.Name, hrp and "hrp")
 print("K1 hrp", hrp.Position)
 cam.CameraType = Enum.CameraType.Scriptable
 cam.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 8, 14), hrp.Position)

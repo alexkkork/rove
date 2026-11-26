@@ -529,8 +529,9 @@ fn humanoid_get_state(
     if class(ctx, id)? != "Humanoid" {
         return Err(err("Humanoid receiver required"));
     }
-    let value = super::humanoid_state::observed(ctx,id)?
-        .ok_or_else(||err("Humanoid state is unavailable until received state or local physics feedback exists"))?;
+    // The engine's resting state is Running; use it when no state has been
+    // received yet so PlayerModule's frame loop does not fault on spawn.
+    let value = super::humanoid_state::observed(ctx, id)?.unwrap_or(8);
     let mut out = MultiValue::new();
     out.push_back(state_item(lua, value)?);
     Ok(out)

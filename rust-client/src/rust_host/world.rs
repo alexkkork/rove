@@ -2480,6 +2480,27 @@ fn client_omitted_default(class: &str, key: &str) -> Option<Json> {
     if class == "InputBinding" {
         return input_binding_default(key);
     }
+    if class == "InputAction" {
+        return match key {
+            "Enabled" | "Editor" => Some(json!(true)),
+            "DisplayName" => Some(json!("")),
+            "Type" => Some(json!({"$enum":{"type":"InputActionType","name":"Bool","value":0}})),
+            "PreferredBinding" => Some(Json::Null),
+            "BoolState" => Some(json!(false)),
+            "Direction1DState" => Some(json!(0)),
+            "Direction2DState" | "ViewportPositionState" => Some(json!({"$vector2":[0,0]})),
+            "Direction3DState" => Some(json!({"$vector3":[0,0,0]})),
+            _ => None,
+        };
+    }
+    if class == "InputContext" {
+        return match key {
+            "Enabled" => Some(json!(true)),
+            "Priority" => Some(json!(1000)),
+            "Sink" | "Editor" => Some(json!(false)),
+            _ => None,
+        };
+    }
     // GUI layout defaults live in the GuiObject/GuiBase2d base classes and are
     // omitted for freshly created UI. Streaming servers therefore hand scripts
     // Frames without Position/AnchorPoint/SizeConstraint, which used to break
@@ -3630,6 +3651,9 @@ fn local_service_supported(class: &str) -> bool {
         class,
         "VirtualInputManager"
             | "VirtualUser"
+            | "ContentProvider"
+            | "Teams"
+            | "ReplicatedFirst"
             | "VRService"
             | "SoundService"
             | "PhysicsService"

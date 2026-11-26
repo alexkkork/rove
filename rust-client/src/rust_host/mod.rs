@@ -40,6 +40,7 @@ pub mod playback;
 pub(crate) mod player_lifecycle;
 pub(crate) mod program_context;
 pub mod remotes;
+pub mod input_actions;
 pub mod render_steps;
 pub mod scheduler;
 pub mod script_threads;
@@ -87,6 +88,7 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
     joint_graph::install(ctx);
     input::install(lua, ctx)?;
     render_steps::install(lua, ctx)?;
+    input_actions::install(lua, ctx)?;
     gui::install(lua, ctx)?;
     camera::install(lua, ctx)?;
     drawing::install(lua, ctx)?;
@@ -107,6 +109,9 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "input_actions_tests.rs"]
+mod input_actions_tests;
 #[cfg(test)]
 mod bindables_tests;
 #[cfg(test)]

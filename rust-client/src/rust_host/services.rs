@@ -1109,11 +1109,7 @@ fn run_info(lua: &Lua, ctx: &WorldRef, id: &str, method: &str) -> mlua::Result<M
 macro_rules! run_info_wrapper {
     ($name:ident, $method:literal) => {
         fn $name(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
-            if !args.is_empty()
-                && !matches!($method, "Set3dRenderingEnabled" | "SetPredictionMode" | "SetRobloxGuiFocused" | "setThrottleFramerateEnabled")
-            {
-                return Err(mlua::Error::RuntimeError(concat!($method, " takes no arguments").to_string()));
-            }
+            let _ = args;
             run_info(lua, ctx, id, $method)
         }
     };
@@ -1132,6 +1128,66 @@ run_info_wrapper!(run_rollout, "GetControlAndVariantRolloutFlags");
 run_info_wrapper!(run_ixp, "GetRobloxClientIxpEnrolledExperiments");
 run_info_wrapper!(run_script_time, "GetTotalScriptPlusExecutionTime");
 run_info_wrapper!(run_noop, "Pause");
+
+/// Local service surface for the remaining startup services. They report the
+/// already-known local session facts without making network requests.
+fn misc_service(lua: &Lua, ctx: &WorldRef, id: &str, method: &str, _args: MultiValue) -> mlua::Result<MultiValue> {
+    let class = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .map(|n| n.class_name.clone())
+        .unwrap_or_default();
+    let mut out = MultiValue::new();
+    match (class.as_str(), method) {
+        ("Teams", "GetTeams" | "getTeams") => {
+            for child in world::children(ctx, id) {
+                if world::is_a(ctx, &child, "Team") {
+                    out.push_back(world::instance(lua, ctx, &child)?);
+                }
+            }
+        }
+        ("Teams", "RebalanceTeams") => {}
+        ("ReplicatedFirst", "IsDefaultLoadingGuiRemoved" | "IsFinishedReplicating") => {
+            out.push_back(Value::Boolean(false))
+        }
+        ("ReplicatedFirst", "RemoveDefaultLoadingScreen" | "SetDefaultLoadingGuiRemoved") => {}
+        ("ContentProvider", "Preload" | "PreloadAsync") => {}
+        ("ContentProvider", "GetFailedRequests" | "GetDetailedFailedRequests"
+        | "ListEncryptedAssets" | "GetDependencyContentIds") => {
+            out.push_back(Value::Table(lua.create_table()?))
+        }
+        ("ContentProvider", "RegisterDefaultEncryptionKey"
+        | "RegisterDefaultSessionKey"
+        | "RegisterEncryptedAsset"
+        | "RegisterSessionEncryptedAsset"
+        | "UnregisterDefaultEncryptionKey"
+        | "UnregisterEncryptedAsset"
+        | "SetBaseUrl") => {}
+        ("ContentProvider", "GetAssetFetchStatus") => out.push_back(Value::Integer(0)),
+        _ => return Err(expected(&class, method)),
+    }
+    Ok(out)
+}
+
+macro_rules! misc_wrapper {
+    ($name:ident, $method:literal) => {
+        fn $name(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+            misc_service(lua, ctx, id, $method, args)
+        }
+    };
+}
+misc_wrapper!(teams_get, "GetTeams");
+misc_wrapper!(teams_rebalance, "RebalanceTeams");
+misc_wrapper!(replicated_first_removed, "IsDefaultLoadingGuiRemoved");
+misc_wrapper!(replicated_first_finished, "IsFinishedReplicating");
+misc_wrapper!(replicated_first_remove_loading, "RemoveDefaultLoadingScreen");
+misc_wrapper!(replicated_first_set_removed, "SetDefaultLoadingGuiRemoved");
+misc_wrapper!(content_preload, "Preload");
+misc_wrapper!(content_preload_async, "PreloadAsync");
+misc_wrapper!(content_failed, "GetFailedRequests");
+misc_wrapper!(content_failed_detailed, "GetDetailedFailedRequests");
+misc_wrapper!(content_status, "GetAssetFetchStatus");
 
 fn ensure_user_settings(lua: &Lua, ctx: &WorldRef) -> mlua::Result<String> {
     if let Some(id) = ctx.borrow().services.get("UserSettings").cloned() {
@@ -1494,8 +1550,36 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         ("SetPredictionMode", run_noop),
         ("SetRobloxGuiFocused", run_noop),
         ("setThrottleFramerateEnabled", run_noop),
+        ("BindToSimulation", run_noop),
+        ("BindToSimulationParallel", run_noop),
+        ("BindToAnimation", run_noop),
+        ("BindToAnimationParallel", run_noop),
     ] {
         world::register_method(ctx, "RunService", name, method);
+    }
+    for (name, method) in [
+        ("GetTeams", teams_get as world::Method),
+        ("getTeams", teams_get),
+        ("RebalanceTeams", teams_rebalance),
+    ] {
+        world::register_method(ctx, "Teams", name, method);
+    }
+    for (name, method) in [
+        ("IsDefaultLoadingGuiRemoved", replicated_first_removed as world::Method),
+        ("IsFinishedReplicating", replicated_first_finished),
+        ("RemoveDefaultLoadingScreen", replicated_first_remove_loading),
+        ("SetDefaultLoadingGuiRemoved", replicated_first_set_removed),
+    ] {
+        world::register_method(ctx, "ReplicatedFirst", name, method);
+    }
+    for (name, method) in [
+        ("Preload", content_preload as world::Method),
+        ("PreloadAsync", content_preload_async),
+        ("GetFailedRequests", content_failed),
+        ("GetDetailedFailedRequests", content_failed_detailed),
+        ("GetAssetFetchStatus", content_status),
+    ] {
+        world::register_method(ctx, "ContentProvider", name, method);
     }
     for (name, method) in [
         ("AddTag", collection_add_tag as world::Method),
