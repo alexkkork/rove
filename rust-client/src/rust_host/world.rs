@@ -1460,6 +1460,23 @@ pub fn apply_delta_with_lua(
                 sync_attribute_child(lua, ctx, id, name, value)?;
             }
         }
+        if action["kind"] == "create" {
+            // A create record can carry its attributes inline.
+            if let (Some(id), Some(attrs)) = (
+                action.pointer("/node/id").and_then(Json::as_str),
+                action
+                    .pointer("/node/attributes")
+                    .and_then(Json::as_object)
+                    .cloned(),
+            ) {
+                for (name, value) in attrs {
+                    if name.starts_with("RBX") {
+                        continue;
+                    }
+                    sync_attribute_child(lua, ctx, id, &name, Some(&value))?;
+                }
+            }
+        }
         let destroyed = hierarchy_events.publish(lua, ctx, action_index)?;
         property_events.publish(lua, ctx, action_index)?;
         health_events.publish(lua, ctx, action_index)?;
@@ -2540,6 +2557,16 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
         if let Some(value) = client_omitted_default(&node.class_name, key, true, false) {
             return Ok(value);
         }
+        if matches!(key, "TextureId" | "TextureID") {
+            for alias in ["Texture", "Image"] {
+                if let Some(value) = node.properties.get(alias) {
+                    return Ok(value.clone());
+                }
+            }
+            if world.lightweight_assets {
+                return Ok(json!(""));
+            }
+        }
         if world.lightweight_assets && super::world_aliases::is_lightweight_asset(key) {
             return Err(mlua::Error::RuntimeError(format!(
                 "property '{key}' unavailable in lightweight asset mode"
@@ -2563,6 +2590,18 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
                         node.class_name, node.class_name
                     ))
                 });
+        }
+    }
+    // `TextureId`/`TextureID` are legacy spellings of Decal.Texture and
+    // ImageLabel.Image.
+    if matches!(key, "TextureId" | "TextureID") {
+        for alias in ["Texture", "Image"] {
+            if let Ok(value) = get_property_from_world(world, id, alias) {
+                return Ok(value);
+            }
+        }
+        if world.lightweight_assets {
+            return Ok(json!(""));
         }
     }
     if world.lightweight_assets && super::world_aliases::is_lightweight_asset(key) {
@@ -5298,6 +5337,28 @@ impl UserData for InstanceHandle {
     }
 }
 
+/// Build `$Attribute*` child holders for every attribute already present in
+/// the initial snapshot.
+fn materialize_snapshot_attributes(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
+    let pending: Vec<(String, String, Json)> = {
+        let world = ctx.borrow();
+        let mut pending = Vec::new();
+        for node in world.nodes.materialized_values() {
+            for (name, value) in &node.attributes {
+                if name.starts_with("RBX") || node.destroyed {
+                    continue;
+                }
+                pending.push((node.id.clone(), name.clone(), value.clone()));
+            }
+        }
+        pending
+    };
+    for (id, name, value) in pending {
+        sync_attribute_child(lua, ctx, &id, &name, Some(&value))?;
+    }
+    Ok(())
+}
+
 fn is_signal_name(key: &str) -> bool {
     matches!(
         key,
@@ -5407,6 +5468,9 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         },
     )?;
     let globals = lua.globals();
+    // Snapshot attributes predate the VM; materialize their `$Attribute*`
+    // holders now so scripts walking children never see them missing.
+    materialize_snapshot_attributes(lua, ctx)?;
     refresh_globals(lua, ctx)?;
     for service in ["UserInputService", "RunService", "CoreGui", "CorePackages"] {
         if !ctx.borrow().services.contains_key(service) {

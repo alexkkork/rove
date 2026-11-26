@@ -138,7 +138,17 @@ fn descendants(ctx: &WorldRef, root: &str) -> mlua::Result<Vec<String>> {
     Ok(out)
 }
 fn primary(ctx: &WorldRef, id: &str) -> mlua::Result<Option<String>> {
-    let value = world::get_property(ctx, id, "PrimaryPart")?;
+    // Workspace/WorldModel have no PrimaryPart property at all; treat the
+    // missing property as "none" so bounds fall back to descendant geometry
+    // instead of faulting (Workspace:GetBoundingBox() is common).
+    let value = match world::get_property(ctx, id, "PrimaryPart") {
+        Ok(value) => value,
+        Err(_) if world::is_a(ctx, id, "Workspace") || world::is_a(ctx, id, "WorldModel") => {
+            return Ok(None)
+        }
+        Err(_) if world::is_a(ctx, id, "Model") => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if value.is_null() {
         return Ok(None);
     }
@@ -147,10 +157,11 @@ fn primary(ctx: &WorldRef, id: &str) -> mlua::Result<Option<String>> {
         .and_then(Json::as_str)
         .ok_or_else(|| err("invalid PrimaryPart reference"))?;
     let w = ctx.borrow();
-    let n = w
-        .nodes
-        .get(id)
-        .ok_or_else(|| err("PrimaryPart reference is unresolved"))?;
+    // A reference can arrive before its target while streaming; fall back to
+    // descendant bounds rather than failing the pivot query.
+    let Some(n) = w.nodes.get(id) else {
+        return Ok(None);
+    };
     if n.destroyed {
         return Ok(None);
     }
