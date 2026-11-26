@@ -150,3 +150,37 @@ Walk -> jump -> land -> jump again, all server-acked in one session:
 
 Fixes: jump ground-snap window widened to 2.5 studs while walking (fast
 walk oscillates the foot gap), region-gate relaxed to pose-based evidence.
+
+## Engine-gap sweep (Nov 26)
+
+Ran real sessions across Crossroads, MM2, and Adopt Me while deleting every
+recurring script error. Notable closed gaps:
+
+- `VirtualUser` + `PlayerMouse` (Hit/Target/Origin/UnitRay/TargetSurface/X/Y/
+  ViewSizeX/Y) with a real camera-ray pick; synthetic clicks fire the
+  ProximityPrompt/ClickDetector under the cursor within activation distance.
+- `RunService:BindToRenderStep`/`UnbindFromRenderStep` + prediction/step id/
+  version info; `InputAction`/`InputContext` with key dispatch; 550 missing
+  `Enum` families; `TextChatService.ChatVersion`; `Teams`; `ContentProvider`;
+  `ReplicatedFirst`; `LocalizationService`/`Translator`; `Stats` gauges;
+  `GuiService` insets/mutators; `Players:GetUserThumbnailAsync`.
+- `Color3uint8` tolerant decoding, null/typeless attribute holders retyped in
+  place, `$Attribute*` children materialized for snapshot and delta attributes,
+  legacy `FindPartOnRay*`, `GetOrigin`, Terrain bounds, `CameraSubject`,
+  destroyed-instance writes/signal connects, `CFrame.p`, lowercase vector axes.
+- `GuiObject`/`GuiBase2d`/`InputBinding` engine defaults so streaming UI and
+  PlayerModule stop faulting on omitted properties.
+- Scheduler: 64 ms VM slice and half-slice frame phases (games with hundreds
+  of RenderStepped handlers no longer abort callbacks).
+- Physics: Terrain is a ground collider and bodies spawned inside geometry are
+  lifted onto the surface, so characters stand still instead of falling out of
+  the world.
+
+Results: MM2 35k nodes / 77 MB / 0 errors; Adopt Me 43k nodes / ~1 error
+(loading-script bytecode only); Crossroads 0-3 errors depending on run.
+All 929 client + 223 core tests green.
+
+Build note: the Homebrew rustc/cmake are x86_64 and crash under Rosetta with
+"unable to load libxcrun". Use `./bin/cargo` (pins the native arm64 toolchain
+and cmake). The pinned Tovek decompiler binary is checked in, so `decompile()`
+works.

@@ -613,6 +613,11 @@ fn is_prunable_part(node: &super::Node) -> bool {
     if !node.server_owned || node.class_name != "Part" {
         return false;
     }
+    // Attribute holders are separate child nodes; a part whose attributes may
+    // be read through those children must keep its wrapper.
+    if !node.attributes.is_empty() {
+        return false;
+    }
     let has = |key: &str| {
         node.properties.contains_key(key)
             || node
