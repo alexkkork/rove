@@ -140,3 +140,13 @@ Verified live in Crossroads across several runs:
 
 Remaining variance is session-length dependent (a few runs ended before the
 move window elapsed), not physics.
+
+## Full physics chain verified (Nov 25)
+
+Walk -> jump -> land -> jump again, all server-acked in one session:
+- walked 40 studs (MoveTo, server acked)
+- jumped 6.4 studs mid-walk, landed, jumped again 6.4 studs
+- 131s session, all 914 client tests + 223 core tests green
+
+Fixes: jump ground-snap window widened to 2.5 studs while walking (fast
+walk oscillates the foot gap), region-gate relaxed to pose-based evidence.
