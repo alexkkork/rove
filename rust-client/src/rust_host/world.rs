@@ -1681,27 +1681,44 @@ pub(crate) fn sync_attribute_child(
         let world = ctx.borrow();
         world.nodes.child_named(id, &child_name, &world.node_order)
     };
-    let Some(value) = value.filter(|v| !v.is_null()) else {
-        if let Some(child) = existing {
-            destroy_instance(lua, ctx, &child)?;
+    // A known null attribute still owns a holder: the engine keeps the child
+    // and the typed empty value. Only an unknown attribute removes it.
+    let value = value.unwrap_or(&Json::Null);
+    let class = match attribute_child_class(value) {
+        Some(class) => class,
+        None => {
+            // No class for null: keep an existing holder on its own class.
+            let Some(child) = existing else { return Ok(()) };
+            let Some(class) = ctx.borrow().nodes.get(&child).map(|n| n.class_name.clone())
+            else {
+                return Ok(());
+            };
+            let fallback = value_object_default(&class, "Value").unwrap_or(Json::Null);
+            return set_property(lua, ctx, &child, "Value", fallback);
         }
-        return Ok(());
     };
-    let Some(class) = attribute_child_class(value) else {
-        return Ok(());
-    };
-    let encoded = match value.get("$instance_handle").and_then(Json::as_str) {
+    let mut encoded = match value.get("$instance_handle").and_then(Json::as_str) {
         Some(target) => json!({"$ref":target}),
         None => value.clone(),
     };
+    // A null attribute still owns a holder; the holder keeps its typed empty
+    // value so `.X` style reads never see nil.
+    if encoded.is_null() {
+        if let Some(default) = value_object_default(class, "Value") {
+            encoded = default;
+        }
+    }
     match existing {
         Some(child) => {
-            if ctx.borrow().nodes.get(&child).is_some_and(|n| n.class_name == class) {
-                set_property(lua, ctx, &child, "Value", encoded)?;
-            } else {
-                destroy_instance(lua, ctx, &child)?;
-                create_attribute_child(lua, ctx, id, &child_name, class, encoded)?;
+            // Retype in place rather than destroy+recreate: a script that just
+            // resolved the child keeps a live reference and `.Value` never
+            // reads as nil mid-swap.
+            let mut world = ctx.borrow_mut();
+            if let Some(node) = world.nodes.get_mut(&child) {
+                node.class_name = class.to_owned();
             }
+            drop(world);
+            set_property(lua, ctx, &child, "Value", encoded)?;
         }
         None => create_attribute_child(lua, ctx, id, &child_name, class, encoded)?,
     }

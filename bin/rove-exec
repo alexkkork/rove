@@ -4,7 +4,8 @@
 # Official Luau VM + rove's Rust replication engine. Low-RAM mode on.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/rust-client/target/release/rove"
+BIN="$ROOT/rust-client/target-arm/release/rove"
+[[ -x "$BIN" ]] || BIN="$ROOT/rust-client/target/release/rove"
 if [[ $# -lt 2 ]]; then
   echo "usage: $(basename "$0") <place-id> <script.luau> [seconds] [flags]" >&2
   exit 2
@@ -12,6 +13,6 @@ fi
 PLACE="$1"; SCRIPT="$2"; SECS="${3:-20}"; shift 3 2>/dev/null || shift $#
 FLAGS=()
 for arg in "$@"; do [[ "$arg" == "--lightweight" ]] || FLAGS+=("$arg"); done
-[[ -x "$BIN" ]] || { echo "build first: cargo build --release --locked --manifest-path rust-client/Cargo.toml --bin rove" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "build first: path/to/cargo build --release --target-dir rust-client/target-arm --manifest-path rust-client/Cargo.toml --bin rove" >&2; exit 1; }
 export ROVE_TOLERATE_UNKNOWN_SETS=1
 exec "$BIN" join --place-id "$PLACE" --script "$SCRIPT" --session-seconds "$SECS" --lightweight ${FLAGS[@]+"${FLAGS[@]}"}

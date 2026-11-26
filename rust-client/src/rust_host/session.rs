@@ -187,7 +187,7 @@ impl Drop for Vm {
                 counts[6] += node.collection_tags.len();
                 bytes[4] += node.id.capacity() + node.class_name.capacity() + node.name.capacity() + node.parent.as_ref().map_or(0, String::capacity);
             }
-            eprintln!("MEMORY_DIAG_VM {}", json!({"node_count":w.nodes.len(),"materialized_node_count":w.nodes.materialized_count(),"counts_nodes_data_properties_overrides_attributes_revisions_tags":counts,"map_json_and_header_string_bytes":bytes,"vm_bytes":self.lua.used_memory(),"rss":rove_client_core::memory::current_process_rss_bytes().ok()}));
+            eprintln!("MEMORY_DIAG_VM {}", json!({"node_count":w.nodes.len(),"materialized_node_count":w.nodes.materialized_count(),"counts_nodes_data_properties_overrides_attributes_revisions_tags":counts,"map_json_and_header_string_bytes":bytes,"vm_bytes":self.lua.used_memory(),"snapshot_bytes":serde_json::to_vec(&w.snapshot).map_or(0,|v|v.len()),"rss":rove_client_core::memory::current_process_rss_bytes().ok()}));
         }
         super::host_io_bindings::close(&self.lua);
     }

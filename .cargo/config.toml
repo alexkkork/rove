@@ -1,3 +1,8 @@
+# The x86_64 Homebrew rustc/cmake run under Rosetta and cannot dlopen the
+# arm64-only libxcrun. bin/cargo wraps these settings.
+[env]
+CMAKE = "/opt/homebrew/bin/cmake"
+
 [target.x86_64-pc-windows-msvc]
 # ship the CRT with the executable so the download works without extra DLLs.
 rustflags = ["-C", "target-feature=+crt-static"]

@@ -113,6 +113,9 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
 #[path = "input_actions_tests.rs"]
 mod input_actions_tests;
 #[cfg(test)]
+#[path = "size_probe_tests.rs"]
+mod size_probe_tests;
+#[cfg(test)]
 mod bindables_tests;
 #[cfg(test)]
 mod closures_tests;

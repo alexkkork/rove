@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# cargo wrapper for this arm64 Mac: the Homebrew rustc/cmake are x86_64 and
+# crash under Rosetta with "unable to load libxcrun", so pin native pieces.
+set -euo pipefail
+export RUSTC="${RUSTC:-$HOME/.cargo/bin/rustc}"
+export CMAKE="${CMAKE:-/opt/homebrew/bin/cmake}"
+exec "${CARGO:-$HOME/.cargo/bin/cargo}" "$@"
