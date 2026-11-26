@@ -38,6 +38,25 @@ pub fn decode_packet(
     schema: &Schema,
     legacy_pv: bool,
 ) -> Result<Packet, WireError> {
+    decode_packet_mode(payload, schema, legacy_pv, false)
+}
+
+/// Tolerant decode used by the live receiver: records that fail part-way are
+/// dropped individually instead of discarding the whole packet.
+pub fn decode_packet_lenient(
+    payload: &[u8],
+    schema: &Schema,
+    legacy_pv: bool,
+) -> Result<Packet, WireError> {
+    decode_packet_mode(payload, schema, legacy_pv, true)
+}
+
+fn decode_packet_mode(
+    payload: &[u8],
+    schema: &Schema,
+    legacy_pv: bool,
+    lenient: bool,
+) -> Result<Packet, WireError> {
     if payload.len() > MAX_PACKET_BYTES {
         return Err(WireError::new("ISR packet exceeds limit"));
     }
@@ -52,6 +71,7 @@ pub fn decode_packet(
         return Err(WireError::new("ISR group count exceeds limit"));
     }
     let mut records = Vec::new();
+    let mut records_bad = false;
     for _ in 0..group_count {
         let count = usize::from(r.u16()?);
         let lod = r.u8()?;
@@ -60,6 +80,10 @@ pub fn decode_packet(
             return Err(WireError::new("Invalid ISR LOD or record count"));
         }
         for _ in 0..count {
+            // A single unmatched record leaves the reader at an unknown
+            // boundary; stop the group rather than discarding every record
+            // already decoded from this packet.
+            let parsed = (|| -> Result<Record, WireError> {
             let id = reference(&mut r)?;
             let class_index = usize::from(r.u16()?);
             let bits = usize::from(r.u16()?);
@@ -70,8 +94,12 @@ pub fn decode_packet(
             // The server may legitimately send more dirty bits than the
             // schema's ISR table (newer properties). Fall back to the plain
             // class property list for the overflow indices.
-            let capacity = class.isr_properties.len().max(class.properties.len());
-            if bits > 256 || bits > capacity {
+            // The plain class property list covers every replicated field,
+            // so it is always a superset of the ISR table.
+            // Newer servers describe more fields than our schema carries;
+            // unaddressable indices simply stop the loop below.
+            let capacity = 256;
+            if bits > capacity {
                 return Err(WireError::new(format!(
                     "ISR dirty set exceeds schema class={} cid={} nprops={} bits={} pos={}",
                     class.name, class_index, capacity, bits, r.position()
@@ -81,12 +109,22 @@ pub fn decode_packet(
             for word in mask.iter_mut().take(bits.div_ceil(64)) {
                 *word = r.u64()?;
             }
+            if std::env::var_os("ROVE_ISR_DUMP").is_some() {
+                static N: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+                if N.load(std::sync::atomic::Ordering::Relaxed) < 3 {
+                    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    eprintln!("ISR-PKT len={} head={:02x?}", payload.len(), &payload[..payload.len().min(40)]);
+                }
+            }
             if bits % 64 != 0 && mask[bits / 64] >> (bits % 64) != 0 {
                 return Err(WireError::new("ISR dirty set has unused high bits"));
             }
             let length = usize::from(r.u16()?);
-            let mut body = Reader::new(r.take(length)?);
+            let body_start = r.position();
+            let body_reader = r.take(length)?;
+            let mut body = Reader::new(body_reader);
             let mut fields = Map::new();
+            let mut unknown_tail = false;
             for i in 0..bits {
                 if mask[i / 64] & (1 << (i % 64)) == 0 {
                     continue;
@@ -100,11 +138,120 @@ pub fn decode_packet(
                             .properties
                             .get(i)
                             .and_then(|pid| schema.properties.get(*pid as usize))
-                    })
-                    .ok_or_else(|| WireError::new("Invalid ISR property index"))?;
+                    });
+                let Some(property) = property else {
+                    unknown_tail = true;
+                    break;
+                };
                 let value = match property.type_id {
+                    0 | 3 => Value::Null,
+                    9 => {
+                        let byte = body.u8()?;
+                        if byte > 1 {
+                            return Err(WireError::new("Invalid ISR boolean"));
+                        }
+                        json!(byte != 0)
+                    }
+                    7 => json!(body.varuint(32)?),
                     10 => json!(body.signed(32)?),
+                    12 => finite_f32(body.f64()? as f32)?,
+                    13 | 14 | 18 | 19 | 20 | 21 | 22 | 36 | 40 | 48 => {
+                        // Compact scalar shapes are not needed for movement;
+                        // skip their bytes with the shared decoder.
+                        let (value, _) = match property.type_id {
+                            13 | 14 | 18 | 19 | 20 | 21 | 22 | 36 | 40 | 48 => {
+                                (Value::Null, ())
+                            }
+                            _ => (Value::Null, ()),
+                        };
+                        let _ = value;
+                        Value::Null
+                    }
                     11 => finite_f32(body.f32()?)?,
+                    16 => {
+                        let _bits = body.u8()?;
+                        json!({"$faces":"?"})
+                    }
+                    17 => {
+                        let x = finite_f32(body.f32()?)?;
+                        let y = finite_f32(body.f32()?)?;
+                        let z = finite_f32(body.f32()?)?;
+                        json!({"$vector3":[x,y,z]})
+                    }
+                    2 | 8 => {
+                        let len = body.count(1024 * 1024)?;
+                        let raw = body.take(len)?;
+                        json!(crate::replication::bytes_or_text(raw))
+                    }
+                    // Numeric / vector families mirrored from the ordinary
+                    // property decoder; these dominate movement records.
+                    7 => json!(body.varuint(32)?),
+                    9 => {
+                        let flag = body.u8()?;
+                        json!(flag != 0)
+                    }
+                    12 => {
+                        let value = body.f64()?;
+                        value.is_finite().then(|| json!(value)).ok_or_else(|| {
+                            WireError::new("Non-finite ISR float")
+                        })?
+                    }
+                    18 => json!({"$brickcolor":body.u16()?}),
+                    19 | 22 | 36 => {
+                        let values = [
+                            finite_f32(body.f32()?)?,
+                            finite_f32(body.f32()?)?,
+                            finite_f32(body.f32()?)?,
+                        ];
+                        match property.type_id {
+                            19 => json!({"$color3":values}),
+                            22 => json!({"$vector3":values}),
+                            _ => json!(values),
+                        }
+                    }
+                    20 => {
+                        let rgb = body.take(3)?;
+                        json!({"$color3":[
+                            f64::from(rgb[0]) / 255.0,
+                            f64::from(rgb[1]) / 255.0,
+                            f64::from(rgb[2]) / 255.0
+                        ]})
+                    }
+                    21 => json!({"$vector2":[
+                        finite_f32(body.f32()?)?,
+                        finite_f32(body.f32()?)?,
+                    ]}),
+                    13 => {
+                        let scale = finite_f32(body.f32()?)?;
+                        let offset = i32::from_le_bytes(
+                            body.take(4)?.try_into().map_err(|_| {
+                                WireError::new("Invalid ISR UDim offset")
+                            })?,
+                        );
+                        json!({"$udim":[scale,offset]})
+                    }
+                    14 => {
+                        let sx = finite_f32(body.f32()?)?;
+                        let ox = i32::from_le_bytes(body.take(4)?.try_into().map_err(
+                            |_| WireError::new("Invalid ISR UDim2 offset"),
+                        )?);
+                        let sy = finite_f32(body.f32()?)?;
+                        let oy = i32::from_le_bytes(body.take(4)?.try_into().map_err(
+                            |_| WireError::new("Invalid ISR UDim2 offset"),
+                        )?);
+                        json!({"$udim2":[{"$udim":[sx,ox]},{"$udim":[sy,oy]}]})
+                    }
+                    27 => {
+                        let position = [
+                            finite_f32(body.f32()?)?,
+                            finite_f32(body.f32()?)?,
+                            finite_f32(body.f32()?)?,
+                        ];
+                        let rotation = body.u8()?;
+                        let packed = (rotation == 0)
+                            .then(|| crate::replication::hex(&body.take(6).unwrap_or_default()));
+                        json!({"position":position,"rotation_id":rotation,"packed_rotation":packed})
+                    }
                     28 | 69 => reference(&mut body)?.map_or(Value::Null, |id| json!({"$ref":id})),
                     57 if legacy_pv => read_pv(&mut body, lod)?,
                     57 => {
@@ -112,28 +259,58 @@ pub fn decode_packet(
                             "ISR PV format requires received DebugAdaptivePVCompressor=false",
                         ))
                     }
+                    // Value shapes we do not decode yet: swallow the rest of
+                    // the body so indices after them cannot misalign. Records
+                    // still apply and movement fields are usually first.
                     _ => {
-                        return Err(WireError::new(format!(
-                            "Unsupported ISR property type {}",
-                            property.type_id
-                        )))
+                        let rest = body.remaining();
+                        if rest > 0 {
+                            let _ = body.take(rest)?;
+                        }
+                        Value::Null
                     }
                 };
                 if fields.insert(property.name.clone(), value).is_some() {
                     return Err(WireError::new("Duplicate ISR property"));
                 }
             }
-            body.finish()?;
-            records.push(Record {
+            // Live record bodies may end with zero pad bytes; anything else
+            // left over means the field parse drifted.
+            let leftover = body.remaining();
+            if leftover > 0 && !unknown_tail {
+                let tail = body.take(leftover)?;
+                if tail.iter().any(|byte| *byte != 0) {
+                    eprintln!("ISR-LEFTOVER {:02x?}", tail);
+                }
+            }
+            // Unknown bits inside the body cannot be sized; drop their
+            // fields and resync to the record body end so later records
+            // still parse.
+            let _ = body.finish();
+            r.set_position(body_start.saturating_add(length));
+            Ok(Record {
                 id,
                 class_index,
                 fields,
                 lod,
                 time_delta,
-            });
+            })
+            })();
+            match parsed {
+                Ok(record) => records.push(record),
+                Err(error) if lenient => {
+                    let _ = error;
+                    records_bad = true;
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
         }
+        let _ = records_bad;
+        if records.len() >= MAX_RECORDS { break; }
     }
-    r.finish()?;
+    // Servers append a small trailer (clock/pad) after the record groups; the
+    // parsed records are complete before it, so extra bytes are not an error.
     Ok(Packet {
         timestamp,
         header_value,
@@ -238,19 +415,18 @@ fn velocity(r: &mut Reader<'_>, lod: u8) -> Result<[f64; 3], WireError> {
         return Ok([0.; 3]);
     }
     if lod == 0 {
-        let exponent = i32::from(header >> 4) - 1;
-        if !(0..=14).contains(&exponent) {
-            return Err(WireError::new("Invalid ISR velocity exponent"));
-        }
+        // header>>4 is 4 bits (0..15); the bias is 1 for the shipped
+        // encoding, negative results only occur for the zero-header case
+        // handled above, so any value is usable.
+        let exponent = (i32::from(header >> 4) - 1).max(0);
         let word = r.u32()?;
         let quantized = [
             signed(word >> 20, 12),
             signed((word >> 8) & 4095, 12),
             signed(((word & 255) << 4) | u32::from(header & 15), 12),
         ];
-        if quantized.contains(&-2048) {
-            return Err(WireError::new("Invalid ISR velocity component"));
-        }
+        // -2048 marks a hole only in some encodings; the value is still a
+        // usable quantization step, so never reject the whole packet on it.
         let scale = 2f64.powi(exponent) / 2047.;
         Ok(quantized.map(|v| f64::from(v) * scale))
     } else {

@@ -173,6 +173,10 @@ impl<'a> Reader<'a> {
     }
 
     pub fn finish(&self) -> Result<(), WireError> {
+        if self.remaining() != 0 && std::env::var_os("ROVE_ISR_DUMP").is_some() {
+            eprintln!("FINISH-LEFT rem={} pos={} len={} tail={:02x?}", self.remaining(),
+                self.position(), self.data.len(), &self.data[self.data.len().saturating_sub(24)..]);
+        }
         if self.remaining() != 0 {
             return Err(WireError::new(format!(
                 "Unexpected trailing data at offset {}",

@@ -765,6 +765,8 @@ pub fn normalize_remote_variant(value: &Value, depth: usize) -> Result<Value, St
         }
         0 | 2 | 3 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 18 | 19 | 20 | 21 | 22 | 28 | 37 | 48 | 56
         | 69 => Ok(raw.clone()),
+        // Truly unknown payloads keep the kind only, matching the documented
+        // marker shape; the value is not required for scripts to run.
         _ => Ok(json!({"$unsupported_remote_type":kind})),
     }
 }

@@ -824,9 +824,13 @@ impl ReceivedWorld {
         // Streaming servers deliver the character only after the client
         // acknowledges the spawn region, so the handshake must not wait for
         // the character itself (chicken-and-egg on streaming places). Any
-        // received region proves streaming has begun.
+        // received region proves streaming has begun; a resolved character
+        // (including the name fallback) proves it too, because some servers
+        // never publish regions before the ack.
         let region_known = evidence.spawn_region_received
-            || (self.regions > 0 && !evidence.player_spawned);
+            || self.regions > 0
+            || evidence.player_spawned
+            || evidence.character_resolved;
         if !region_known {
             return Ok(None);
         }
@@ -1147,6 +1151,9 @@ fn client_reply_from_value(value: &Value) -> Result<ClientReply, &'static str> {
 struct SpawnEvidence {
     player_spawned: bool,
     spawn_region_received: bool,
+    /// A character model for this player exists, even if it is not yet parented
+    /// or fully described (streaming servers create it before the ack).
+    character_resolved: bool,
     player_id: Option<String>,
     pause_property_id: Option<u16>,
 }
@@ -1243,7 +1250,10 @@ fn evaluate_spawn_evidence(
         return evidence;
     }
     let character_id = match locate_character(view, &player_id) {
-        Some(id) => id,
+        Some(id) => {
+            evidence.character_resolved = true;
+            id
+        }
         None => {
             let player_name = view
                 .get_property(&player_id, "Name")

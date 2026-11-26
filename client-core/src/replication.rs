@@ -2210,7 +2210,7 @@ fn key_to_value(key: Option<(u64, u32)>) -> Value {
 fn bytes_value(bytes: impl AsRef<[u8]>) -> Value {
     json!({"$bytes_hex":hex(bytes.as_ref())})
 }
-fn bytes_or_text(bytes: impl AsRef<[u8]>) -> Value {
+pub(crate) fn bytes_or_text(bytes: impl AsRef<[u8]>) -> Value {
     match std::str::from_utf8(bytes.as_ref()) {
         Ok(text) => json!(text),
         Err(_) => bytes_value(bytes),
@@ -2227,7 +2227,7 @@ fn decode_hex_16(text: &str) -> Result<[u8; 16], WireError> {
     }
     Ok(bytes)
 }
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
