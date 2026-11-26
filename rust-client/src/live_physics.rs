@@ -514,7 +514,7 @@ impl LivePhysicsSimulator {
             let mut best: Option<f64> = None;
             for surface in &self.surfaces {
                 let gap = foot - surface.maximum[1];
-                if !(0.0..=1.5).contains(&gap) {
+                if !(0.0..=2.5).contains(&gap) {
                     continue;
                 }
                 let overlaps = (0..3).step_by(2).all(|axis| {
