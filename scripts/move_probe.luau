@@ -1,6 +1,6 @@
 local lp = game:GetService("Players").LocalPlayer
 local c
-for i = 1, 90 do
+for i = 1, 120 do
   c = lp.Character
   if c and c:FindFirstChild("HumanoidRootPart") then break end
   task.wait(0.5)

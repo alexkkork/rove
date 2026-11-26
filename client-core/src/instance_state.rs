@@ -73,10 +73,23 @@ fn decode_packet_mode(
     let mut records = Vec::new();
     let mut records_bad = false;
     for _ in 0..group_count {
-        let count = usize::from(r.u16()?);
-        let lod = r.u8()?;
-        let time_delta = r.u8()?;
+        // Live packets may end mid-group; keep what decodes.
+        let header = (|| -> Result<(u16, u8, u8), WireError> {
+            Ok((r.u16()?, r.u8()?, r.u8()?))
+        })();
+        let (count_raw, lod, time_delta) = match header {
+            Ok(values) => values,
+            Err(error) if lenient && !records.is_empty() => {
+                let _ = error;
+                break;
+            }
+            Err(error) => return Err(error),
+        };
+        let count = usize::from(count_raw);
         if lod > 3 || records.len() + count > MAX_RECORDS {
+            if lenient {
+                break;
+            }
             return Err(WireError::new("Invalid ISR LOD or record count"));
         }
         for _ in 0..count {
@@ -298,7 +311,7 @@ fn decode_packet_mode(
             })();
             match parsed {
                 Ok(record) => records.push(record),
-                Err(error) if lenient => {
+                Err(error) if lenient && !records.is_empty() => {
                     let _ = error;
                     records_bad = true;
                     break;
@@ -478,9 +491,12 @@ pub(crate) struct Prepared {
 #[derive(Default)]
 pub(crate) struct Receiver {
     legacy: bool,
+    lenient: bool,
     stamps: HashMap<Arc<str>, Stamp>,
     received: u64,
     decoded: u64,
+    // set by the live owner
+    // (see set_lenient)
     rejected: u64,
     unavailable: u64,
     applied: u64,
@@ -498,6 +514,11 @@ impl Receiver {
         self.received += 1;
         self.unavailable += 1;
     }
+    /// Enable per-record recovery for live traffic.
+    pub fn set_lenient(&mut self, lenient: bool) {
+        self.lenient = lenient;
+    }
+
     pub fn prepare(
         &mut self,
         payload: &[u8],
@@ -505,7 +526,7 @@ impl Receiver {
         world: &WorldView,
     ) -> Option<Prepared> {
         self.received += 1;
-        let packet = match decode_packet(payload, schema, self.legacy) {
+        let packet = match decode_packet_mode(payload, schema, self.legacy, self.lenient) {
             Ok(packet) => packet,
             Err(error) => {
                 self.rejected += 1;

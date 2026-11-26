@@ -237,7 +237,17 @@ impl SessionCore {
     pub fn with_limits(max_records: usize, max_bytes: usize) -> Result<Self, JournalError> {
         Ok(Self {
             decoder: None,
-            instance_state: crate::instance_state::Receiver::default(),
+            instance_state: {
+                let mut receiver = crate::instance_state::Receiver::default();
+                // The live client tolerates partially-decodable ISR packets;
+                // fixtures and replay keep the strict behavior.
+                if std::env::var_os("ROVE_LENIENT_ISR").is_some()
+                    || std::env::var_os("ROVE_LIVE_SESSION").is_some()
+                {
+                    receiver.set_lenient(true);
+                }
+                receiver
+            },
             world: None,
             journal: ReplayJournal::with_limits(max_records, max_bytes)?,
             next_packet_sequence: 1,

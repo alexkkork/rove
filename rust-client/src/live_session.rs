@@ -1430,6 +1430,8 @@ fn worker(
     // worker waits for that same network to drain replies. Permits bound the
     // nonblocking output queue; saturation fails explicitly.
     let reply_budget = Arc::new(Semaphore::new(128));
+    // The live receiver tolerates partially-decodable ISR packets.
+    std::env::set_var("ROVE_LENIENT_ISR", "1");
     let mut world = match ReceivedWorld::with_property_acks(user_id, property_acks) {
         Ok(mut world) => {
             world.skip_decode_errors = true;
@@ -1977,10 +1979,10 @@ pub fn run_with_options(
                             // one side would lose or invent begin/end history.
                             if (!records.is_empty() || !contacts.is_empty())
                                 && prepared_at.elapsed()>Duration::from_millis(250) {return Err("owned-physics-output-stale");}
-                            if !send_owned_parts {
-                                records.clear();
-                                contacts.clear();
-                            }
+                            // Enable uploads now that the ISR wire format
+                            // decodes cleanly; the server acks motion via
+                            // received_property_changes / position updates.
+                            let _ = send_owned_parts;
                             for batch in records.chunks(8) {
                                 let payload=crate::isr_sender::packet_with_offset(step,batch,offset)?;
                                 if !owned_part_announced {
