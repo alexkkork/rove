@@ -70,7 +70,10 @@ pub(crate) fn step(
     // Keep accounting actual execution time in the returned report.
     observe(lua, "prepare", stage);
     let stage = Instant::now();
-    let reserved = budget / 3;
+    // Frame signal batches (RenderStepped, Stepped, Heartbeat) are where game
+    // scripts do their per-frame work; give each phase half the slice so a
+    // large connection count finishes instead of aborting mid-callback.
+    let reserved = budget / 2;
     let animation = scheduler::step_phase(lua, scheduler, reserved, || fire(&["PreAnimation"]))?;
     observe(lua, "pre_animation", stage);
     let stage = Instant::now();
