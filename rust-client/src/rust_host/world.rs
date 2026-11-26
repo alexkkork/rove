@@ -1445,6 +1445,21 @@ pub fn apply_delta_with_lua(
         player_events.publish(lua, ctx, action_index)?;
         collection_events.publish(lua, ctx, action_index)?;
         attribute_events.publish(lua, ctx, action_index)?;
+        // Received attribute writes expose the same `$Attribute*` child the
+        // engine builds, so scripts walking children see the value.
+        if let Some(update) = action.get("attribute_update") {
+            if let (Some(id), Some(name)) = (
+                action.get("id").and_then(Json::as_str),
+                update.get("name").and_then(Json::as_str),
+            ) {
+                let value = if update.get("known").and_then(Json::as_bool) == Some(true) {
+                    update.get("value")
+                } else {
+                    None
+                };
+                sync_attribute_child(lua, ctx, id, name, value)?;
+            }
+        }
         let destroyed = hierarchy_events.publish(lua, ctx, action_index)?;
         property_events.publish(lua, ctx, action_index)?;
         health_events.publish(lua, ctx, action_index)?;
@@ -1605,6 +1620,102 @@ pub(super) fn fire_attribute_changed(
         &format!("attribute:{name}"),
         MultiValue::new(),
     )
+}
+
+/// Value-holder class the engine uses to expose an attribute as a child.
+fn attribute_child_class(value: &Json) -> Option<&'static str> {
+    if value.get("$vector2").is_some() {
+        return Some("Vector2Value");
+    }
+    if value.get("$vector3").is_some() {
+        return Some("Vector3Value");
+    }
+    if value.get("$color3").is_some() {
+        return Some("Color3Value");
+    }
+    if value.get("$cframe").is_some() {
+        return Some("CFrameValue");
+    }
+    if value.get("$brickcolor").is_some() {
+        return Some("BrickColorValue");
+    }
+    if value.get("$ray").is_some() {
+        return Some("RayValue");
+    }
+    if value.get("$instance_handle").is_some() || value.get("$ref").is_some() {
+        return Some("ObjectValue");
+    }
+    match value {
+        Json::Bool(_) => Some("BoolValue"),
+        Json::Number(_) => Some("NumberValue"),
+        Json::String(_) => Some("StringValue"),
+        _ => None,
+    }
+}
+
+/// The engine exposes every attribute as a `$Attribute<name>` child holding
+/// the value. Games walk children directly instead of calling GetAttribute,
+/// so keep these holders in sync.
+pub(crate) fn sync_attribute_child(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    name: &str,
+    value: Option<&Json>,
+) -> mlua::Result<()> {
+    if ctx.borrow().nodes.get(id).is_none_or(|n| n.destroyed) {
+        return Ok(());
+    }
+    let child_name = format!("$Attribute{name}");
+    let existing = {
+        let world = ctx.borrow();
+        world.nodes.child_named(id, &child_name, &world.node_order)
+    };
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        if let Some(child) = existing {
+            destroy_instance(lua, ctx, &child)?;
+        }
+        return Ok(());
+    };
+    let Some(class) = attribute_child_class(value) else {
+        return Ok(());
+    };
+    let encoded = match value.get("$instance_handle").and_then(Json::as_str) {
+        Some(target) => json!({"$ref":target}),
+        None => value.clone(),
+    };
+    match existing {
+        Some(child) => {
+            if ctx.borrow().nodes.get(&child).is_some_and(|n| n.class_name == class) {
+                set_property(lua, ctx, &child, "Value", encoded)?;
+            } else {
+                destroy_instance(lua, ctx, &child)?;
+                create_attribute_child(lua, ctx, id, &child_name, class, encoded)?;
+            }
+        }
+        None => create_attribute_child(lua, ctx, id, &child_name, class, encoded)?,
+    }
+    Ok(())
+}
+
+fn create_attribute_child(
+    lua: &Lua,
+    ctx: &WorldRef,
+    parent: &str,
+    name: &str,
+    class: &str,
+    value: Json,
+) -> mlua::Result<()> {
+    let child = create_instance(lua, ctx, class, Some(parent))?;
+    let child_id = instance_id(&child).ok_or_else(|| {
+        mlua::Error::RuntimeError("attribute holder id missing".into())
+    })?;
+    let mut world = ctx.borrow_mut();
+    if let Some(node) = world.nodes.get_mut(&child_id) {
+        node.name = name.to_owned();
+        node.local_overrides.insert("Value".into(), value);
+    }
+    Ok(())
 }
 
 pub fn register_method(ctx: &WorldRef, class: &'static str, name: &'static str, method: Method) {
@@ -5165,6 +5276,20 @@ impl UserData for InstanceHandle {
                 }
                 emit(&ctx, "mutations", mutation);
                 if changed {
+                    // Actor VMs journal only the attribute action; the holder
+                    // create would need its own fencing, so it is built when
+                    // the write reaches the root world instead.
+                    if !actor_internal_revision {
+                        let current = {
+                            let world = ctx.borrow();
+                            world
+                                .nodes
+                                .get(&this.id)
+                                .and_then(|n| n.attributes.get(&name))
+                                .cloned()
+                        };
+                        sync_attribute_child(lua, &ctx, &this.id, &name, current.as_ref())?;
+                    }
                     fire_attribute_changed(lua, &ctx, &this.id, &name)?;
                 }
                 Ok(())

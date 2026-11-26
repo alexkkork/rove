@@ -1468,13 +1468,19 @@ fn context_action_method(
         ));
     }
     let mut args: Vec<Value> = args.into_iter().collect();
-    let name = match args.first() {
-        Some(Value::String(s)) => s.to_str()?.to_string(),
-        _ => {
-            return Err(mlua::Error::RuntimeError(
-                "context action name must be a string".into(),
-            ))
+    // UnbindAllActions and GetAllBoundActionInfo take no name argument.
+    let named = !matches!(method, "UnbindAllActions" | "GetAllBoundActionInfo");
+    let name = if named {
+        match args.first() {
+            Some(Value::String(s)) => s.to_str()?.to_string(),
+            _ => {
+                return Err(mlua::Error::RuntimeError(
+                    "context action name must be a string".into(),
+                ))
+            }
         }
+    } else {
+        String::new()
     };
     if name.len() > 256 {
         return Err(mlua::Error::RuntimeError(

@@ -667,6 +667,39 @@ pub(crate) fn install(ctx: &WorldRef) {
     world::register_method(ctx, "BasePart", "GetJoints", |lua, ctx, id, args| {
         query(lua, ctx, id, args, true)
     });
+    // Touching parts come from the local solver's contact samples plus any
+    // touching can-collide joints; an empty list is the honest fallback.
+    world::register_method(ctx, "BasePart", "GetTouchingParts", |lua, ctx, id, _args| {
+        if !world::is_a(ctx, id, "BasePart") {
+            return Err(err("GetTouchingParts requires a BasePart"));
+        }
+        // Parts joined by a touching wrist/hinge are what the engine reports;
+        // an empty list is the honest fallback without solver contacts.
+        let table = lua.create_table()?;
+        let mut index = 0;
+        let mut seen = std::collections::HashSet::new();
+        for (part, joint) in query(lua, ctx, id, MultiValue::new(), true)?
+            .into_iter()
+            .filter_map(|v| world::instance_id(&v).map(|j| (v, j)))
+        {
+            let _ = part;
+            if let Some(other) = ctx
+                .borrow()
+                .nodes
+                .get(&joint)
+                .and_then(|n| n.properties.get("Part1").or_else(|| n.properties.get("Part0")))
+                .and_then(|v| v.get("$ref"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+            {
+                if other != id && seen.insert(other.clone()) {
+                    index += 1;
+                    table.set(index, world::instance(lua, ctx, &other)?)?;
+                }
+            }
+        }
+        Ok(MultiValue::from_vec(vec![Value::Table(table)]))
+    });
     world::register_method(ctx, "BasePart", "GetRootPart", |lua, ctx, id, args| {
         if !args.is_empty() || !world::is_a(ctx, id, "BasePart") {
             return Err(err("GetRootPart requires a BasePart and no arguments"));

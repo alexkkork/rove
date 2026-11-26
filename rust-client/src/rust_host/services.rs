@@ -1141,11 +1141,16 @@ fn misc_service(lua: &Lua, ctx: &WorldRef, id: &str, method: &str, _args: MultiV
     let mut out = MultiValue::new();
     match (class.as_str(), method) {
         ("Teams", "GetTeams" | "getTeams") => {
+            // Single array return, like the engine.
+            let table = lua.create_table()?;
+            let mut index = 0;
             for child in world::children(ctx, id) {
                 if world::is_a(ctx, &child, "Team") {
-                    out.push_back(world::instance(lua, ctx, &child)?);
+                    index += 1;
+                    table.set(index, world::instance(lua, ctx, &child)?)?;
                 }
             }
+            out.push_back(Value::Table(table));
         }
         ("Teams", "RebalanceTeams") => {}
         ("ReplicatedFirst", "IsDefaultLoadingGuiRemoved" | "IsFinishedReplicating") => {
