@@ -457,11 +457,7 @@ impl World {
                 .and_then(Json::as_object)
                 .cloned()
                 .unwrap_or_default();
-            let revisions = obj
-                .get("property_revisions")
-                .and_then(Json::as_object)
-                .cloned()
-                .unwrap_or_default();
+            let revisions = revisions_from_json(obj.get("property_revisions"));
             let mut properties = if projected.is_some() {
                 JsonMap::new()
             } else {
@@ -570,7 +566,7 @@ impl World {
                         .unwrap_or(false);
                     // Received revision values already live in the projected
                     // record. The local map only tracks later override writes.
-                    let revisions = JsonMap::new();
+                    let revisions = std::collections::HashMap::new();
                     world.record_order(&id);
                     if class_name.ends_with("Service")
                         || matches!(
@@ -652,7 +648,7 @@ impl World {
                         properties: JsonMap::new(),
                         local_overrides: JsonMap::new(),
                         attributes: JsonMap::new(),
-                        revisions: JsonMap::new(),
+                        revisions: std::collections::HashMap::new(),
                         local_revision: 0,
                         collection_tags: Vec::new(),
                     }
@@ -938,11 +934,7 @@ impl World {
                     if projected.is_none() {
                         received_complete_create_defaults(record, &class_name, &mut properties);
                     }
-                    let revisions = record
-                        .get("property_revisions")
-                        .and_then(Json::as_object)
-                        .cloned()
-                        .unwrap_or_default();
+                    let revisions = revisions_from_json(record.get("property_revisions"));
                     let collection_tags = record
                         .get("collection_tags")
                         .and_then(Json::as_array)
@@ -1041,11 +1033,13 @@ impl World {
                         clear_received_property_override(node, &key);
                         if shared.and_then(|v| v.lookup_node(&id)).is_none() {
                             node.properties.insert(key.clone(), value);
-                            node.revisions.insert(key, json!(action_sequence));
+                            node.revisions.insert(key, action_sequence);
                         } else if let Some(projected) = shared.and_then(|v| v.lookup_node(&id)) {
                             match projected.revision(&key).ok().flatten() {
                                 Some(revision) => {
-                                    node.revisions.insert(key, revision);
+                                    if let Some(revision) = revision.as_u64() {
+                                        node.revisions.insert(key, revision);
+                                    }
                                 }
                                 None => {
                                     node.revisions.remove(&key);
@@ -1746,7 +1740,7 @@ fn create_attribute_child(
             properties,
             local_overrides: JsonMap::new(),
             attributes: JsonMap::new(),
-            revisions: JsonMap::new(),
+            revisions: std::collections::HashMap::new(),
             local_revision: 0,
             collection_tags: Vec::new(),
         }
@@ -2912,13 +2906,38 @@ fn player_constructor_default(class: &str, key: &str) -> Option<Json> {
         .flatten()
 }
 
+/// Parse a snapshot `property_revisions` object into typed revisions.
+pub(crate) fn revisions_from_json(value: Option<&Json>) -> std::collections::HashMap<String, u64> {
+    value
+        .and_then(Json::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_u64()?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Render typed revisions back to the wire/snapshot shape.
+pub(crate) fn revisions_to_json(revisions: &std::collections::HashMap<String, u64>) -> Json {
+    if revisions.is_empty() {
+        return Json::Object(JsonMap::new());
+    }
+    Json::Object(
+        revisions
+            .iter()
+            .map(|(key, value)| (key.clone(), json!(value)))
+            .collect(),
+    )
+}
+
 pub fn get_property_revision(ctx: &WorldRef, id: &str, key: &str) -> Option<u64> {
     let world = ctx.borrow();
     let node = world.nodes.get(id)?;
     if let Some(revision) = super::movement::received_joint_revision(node, key) {
         return Some(revision);
     }
-    if let Some(revision) = node.revisions.get(key).and_then(Json::as_u64) {
+    if let Some(revision) = node.revisions.get(key).copied() {
         return Some(revision);
     }
     let wire_key = super::world_aliases::wire_key(&node.class_name, key);
@@ -2940,7 +2959,7 @@ pub fn get_property_revision(ctx: &WorldRef, id: &str, key: &str) -> Option<u64>
                     })
                 })
         })
-        .or_else(|| wire_key.and_then(|wire| node.revisions.get(wire).and_then(Json::as_u64)))
+        .or_else(|| wire_key.and_then(|wire| node.revisions.get(wire).copied()))
 }
 
 fn property_origin(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<String> {
@@ -3046,7 +3065,7 @@ pub fn set_engine_property(
     }
     node.local_overrides.insert(key.into(), value);
     if let Some(revision) = revision {
-        node.revisions.insert(key.into(), json!(revision));
+        node.revisions.insert(key.into(), revision);
     }
     Ok(())
 }
@@ -3717,7 +3736,7 @@ fn create_initialized_instance(
             properties: properties.clone(),
             local_overrides: JsonMap::new(),
             attributes: JsonMap::new(),
-            revisions: JsonMap::new(),
+            revisions: std::collections::HashMap::new(),
             local_revision: 0,
             collection_tags: Vec::new(),
         }
@@ -3801,7 +3820,7 @@ pub fn create_internal_node(
                 properties,
                 local_overrides: JsonMap::new(),
                 attributes: JsonMap::new(),
-                revisions: JsonMap::new(),
+                revisions: std::collections::HashMap::new(),
                 local_revision: 0,
                 collection_tags: Vec::new(),
             }
@@ -3820,7 +3839,7 @@ pub fn create_internal_node(
             "properties":node.properties,"attributes":node.attributes,
             "attributes_known":node.attributes_known,"collection_tags":node.collection_tags,
             "collection_tags_known":node.collection_tags_known,"destroyed":false,"server_owned":false,
-            "property_revisions":node.revisions
+            "property_revisions":revisions_to_json(&node.revisions)
         }}),
     );
     if let Some(parent) = parent {
@@ -3871,7 +3890,7 @@ pub fn ensure_engine_global_node(lua: &Lua, ctx: &WorldRef, class: &str) -> mlua
                         properties: JsonMap::new(),
                         local_overrides: JsonMap::new(),
                         attributes: JsonMap::new(),
-                        revisions: JsonMap::new(),
+                        revisions: std::collections::HashMap::new(),
                         local_revision: 0,
                         collection_tags: Vec::new(),
                     }
@@ -3977,7 +3996,7 @@ pub fn ensure_client_service(lua: &Lua, ctx: &WorldRef, class: &str) -> mlua::Re
                 properties: JsonMap::from_iter([("Archivable".into(), json!(true))]),
                 local_overrides: JsonMap::new(),
                 attributes: JsonMap::new(),
-                revisions: JsonMap::new(),
+                revisions: std::collections::HashMap::new(),
                 local_revision: 0,
                 collection_tags: Vec::new(),
             }
@@ -4111,11 +4130,7 @@ pub(crate) fn apply_actor_create_for_replay(
         .unwrap_or(true);
     let collection_tags = validate_tags(&collection_tags, collection_tags_known)
         .map_err(mlua::Error::RuntimeError)?;
-    let property_revisions = data
-        .get("property_revisions")
-        .and_then(Json::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let property_revisions = revisions_from_json(data.get("property_revisions"));
     let scale_state = super::movement::import_scale_baseline(root, id, record)?;
     let curve_state = super::curves::import_state(root, id, record)?;
     if data.get("server_owned").and_then(Json::as_bool) == Some(true)
@@ -4197,7 +4212,7 @@ pub(crate) fn apply_actor_create_for_replay(
             "properties":node.properties,"attributes":node.attributes,
             "attributes_known":node.attributes_known,"collection_tags":node.collection_tags,
             "collection_tags_known":node.collection_tags_known,
-            "property_revisions":node.revisions,"destroyed":false,"server_owned":false
+            "property_revisions":revisions_to_json(&node.revisions),"destroyed":false,"server_owned":false
         }});
         mutation["actor_origin"] = json!(actor_id);
         let curve = world.curve_state.record(id);
@@ -4395,7 +4410,7 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
                 properties,
                 local_overrides: JsonMap::new(),
                 attributes: attributes.as_object().cloned().unwrap_or_default(),
-                revisions: JsonMap::new(),
+                revisions: std::collections::HashMap::new(),
                 local_revision: 0,
                 collection_tags,
             }

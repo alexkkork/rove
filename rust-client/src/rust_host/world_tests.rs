@@ -739,7 +739,7 @@ fn actor_world_sync_preserves_actor_local_nodes_and_overrides() {
             .get_mut("p")
             .unwrap()
             .revisions
-            .insert("Anchored".into(), json!(8));
+            .insert("Anchored".into(), 8);
         root.sequence = 8;
     }
     actor.borrow_mut().sync_actor_fork(&root.borrow());

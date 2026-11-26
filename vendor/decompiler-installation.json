@@ -5,7 +5,8 @@
   "profile": "fastrel",
   "license": "vendor/Tovek/LICENSE.txt",
   "binary": "vendor/Tovek/target/fastrel/luau-lifter",
-  "binary_sha256": "eacf36f31efe908f48e4608f6ab83b9d04c71cc819532278c79a770e4fe8435e",
+  "binary_sha256": "7246f611ab76d3805618e7f220de42caeed509957f2e0fa4555525ee8bde443c",
   "cargo_lock_sha256": "b5bd6aefbe27f7d2debab5b25594b3e6220d837d05f2705462ddfb3b1ed1a59e",
-  "rustc": "rustc 1.97.0-nightly (e8e4541ff 2026-04-15)"
+  "rustc": "rustc 1.97.0-nightly (e8e4541ff 2026-04-15)",
+  "local_build_rustc": "RUSTC_BOOTSTRAP=1 cargo build --profile fastrel (homebrew rustc 1.99.1)"
 }

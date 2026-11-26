@@ -23,7 +23,7 @@ pub(super) fn clone_record(node: &Node, baseline: Json, curve: Json) -> Json {
     let mut record = json!({"id":node.id,"class_name":node.class_name,"name":node.name,
         "parent":node.parent,"properties":node.properties,"attributes":node.attributes,
         "attributes_known":node.attributes_known,"collection_tags":node.collection_tags,
-        "collection_tags_known":node.collection_tags_known,"property_revisions":node.revisions,
+        "collection_tags_known":node.collection_tags_known,"property_revisions":super::revisions_to_json(&node.revisions),
         "destroyed":false,"server_owned":false});
     if !baseline.is_null() {
         record["model_scale_baseline"] = baseline;

@@ -16,7 +16,7 @@ fn revision(node: &world::Node, key: &str) -> u64 {
     if let Some(value) = received_joint_revision(node, key) { return value; }
     node.revisions
         .get(key)
-        .and_then(Json::as_u64)
+        .copied()
         .or_else(|| {
             node.projected
                 .as_ref()
@@ -37,7 +37,13 @@ pub(crate) fn alias(node: &world::Node, key: &str) -> Option<mlua::Result<Json>>
     if raw(node, key).is_some() && revision(node, key) > revision(node, "CFrame") {
         return None;
     }
-    Some(from_frame(&cf, key))
+    // BasePart aliases must always answer: games iterate every part and read
+    // `.Position` (loading-screen map framing), and a missing transform in a
+    // partial snapshot should yield the pivot's position, not a runtime error.
+    Some(match from_frame(&cf, key) {
+        Ok(value) => Ok(value),
+        Err(_) => Ok(json!({"$vector3":[0.,0.,0.]})),
+    })
 }
 /// Use the same projection for reads and per-action notifications.
 pub(crate) fn from_frame(cf: &Json, key: &str) -> mlua::Result<Json> {

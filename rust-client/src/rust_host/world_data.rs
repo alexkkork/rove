@@ -8,7 +8,9 @@ pub struct NodeData {
     pub properties: JsonMap<String, Json>,
     pub local_overrides: JsonMap<String, Json>,
     pub attributes: JsonMap<String, Json>,
-    pub revisions: JsonMap<String, Json>,
+    /// Monotonic per-property wire revisions. Stored as integers, not JSON,
+    /// because a boxed number per property triples this map's size.
+    pub revisions: std::collections::HashMap<String, u64>,
     pub local_revision: u64,
     pub collection_tags: Vec<String>,
 }

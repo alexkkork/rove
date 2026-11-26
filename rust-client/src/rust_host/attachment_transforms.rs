@@ -188,7 +188,7 @@ fn prepare_local(raw: &Json, key: &str, value: &Json) -> mlua::Result<Json> {
 fn received_revision(node: &world::Node, key: &str) -> u64 {
     node.revisions
         .get(key)
-        .and_then(Json::as_u64)
+        .copied()
         .or_else(|| {
             node.projected
                 .as_ref()

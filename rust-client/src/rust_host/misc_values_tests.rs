@@ -148,7 +148,7 @@ fn object_and_spatial_filters_reject_cross_world_handles_even_with_same_id() {
                 properties: serde_json::Map::new(),
                 local_overrides: serde_json::Map::new(),
                 attributes: serde_json::Map::new(),
-                revisions: serde_json::Map::new(),
+                revisions: std::collections::HashMap::new(),
                 local_revision: 0,
                 collection_tags: Vec::new(),
             }.pack(),

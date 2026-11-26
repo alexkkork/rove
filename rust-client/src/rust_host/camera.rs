@@ -763,6 +763,19 @@ fn camera_subject(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Va
     let character = world::get_property(ctx, &player, "Character")
         .ok()
         .and_then(|v| v.get("$ref").and_then(Json::as_str).map(str::to_owned));
+    // The Character ref lags on streaming servers; match the model by name.
+    let character = character.or_else(|| {
+        let world = ctx.borrow();
+        let name = world.nodes.get(&player)?.name.clone();
+        let workspace = world.services.get("Workspace")?.clone();
+        drop(world);
+        world::children(ctx, &workspace).into_iter().find(|child| {
+            ctx.borrow()
+                .nodes
+                .get(child)
+                .is_some_and(|n| n.class_name == "Model" && n.name == name && !n.destroyed)
+        })
+    });
     let Some(character) = character else {
         return Ok(Some(Value::Nil));
     };

@@ -235,7 +235,9 @@ impl Runtime {
         Ok(parsed)
     }
     pub fn poll(&mut self) -> Result<Value, String> {
-        self.poll_with_budget(5)
+        // One frame of latency at 60 Hz. The old 5 ms slice starved game
+        // callbacks on busy servers and aborted them mid-callback.
+        self.poll_with_budget(16)
     }
     pub(crate) fn poll_with_budget(&mut self, timeout_ms: u32) -> Result<Value, String> {
         if !(1..=2000).contains(&timeout_ms) {

@@ -177,10 +177,13 @@ impl Drop for Vm {
             for node in w.nodes.materialized_values() {
                 counts[0] += 1;
                 counts[1] += usize::from(node.data.is_some());
-                for (i, map) in [&node.properties, &node.local_overrides, &node.attributes, &node.revisions].into_iter().enumerate() {
+                for (i, map) in [&node.properties, &node.local_overrides, &node.attributes].into_iter().enumerate() {
                     counts[i + 2] += map.len();
                     bytes[i] += serde_json::to_vec(map).map_or(0, |v| v.len());
                 }
+                counts[5] += node.revisions.len();
+                bytes[3] += node.revisions.len() * (std::mem::size_of::<String>() + std::mem::size_of::<u64>())
+                    + node.revisions.keys().map(String::len).sum::<usize>();
                 counts[6] += node.collection_tags.len();
                 bytes[4] += node.id.capacity() + node.class_name.capacity() + node.name.capacity() + node.parent.as_ref().map_or(0, String::capacity);
             }
