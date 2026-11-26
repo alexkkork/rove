@@ -2684,6 +2684,22 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
     if class == "InputBinding" {
         return input_binding_default(key);
     }
+    if class == "Stats" {
+        return match key {
+            "DataSendKbps" | "DataReceiveKbps" | "PhysicsSendKbps" | "PhysicsReceiveKbps" => {
+                Some(json!(0.0))
+            }
+            "FrameTime" | "HeartbeatTime" | "PhysicsStepTime" => Some(json!(1.0 / 60.0)),
+            "HeartbeatTimeMs" | "PhysicsStepTimeMs" => Some(json!(16.6)),
+            "InstanceCount" | "PrimitivesCount" | "MovingPrimitivesCount" | "ContactsCount"
+            | "SceneDrawcallCount" | "SceneTriangleCount" | "ShadowsDrawcallCount"
+            | "ShadowsTriangleCount" | "UI2DDrawcallCount" | "UI2DTriangleCount"
+            | "UI3DDrawcallCount" | "UI3DTriangleCount" => Some(json!(0)),
+            "RenderCPUFrameTime" | "RenderGPUFrameTime" => Some(json!(0.0)),
+            "MemoryTrackingEnabled" => Some(json!(true)),
+            _ => None,
+        };
+    }
     if class == "DataModel" {
         return match key {
             "CreatorType" => Some(json!({"$enum":{"type":"CreatorType","name":"User","value":0}})),
@@ -3798,6 +3814,7 @@ pub fn create_internal_node(
             | "UserGameSettings"
             | "GlobalSettings"
             | "PluginManager"
+            | "Translator"
     ) {
         return Err(mlua::Error::RuntimeError(
             "class is not available to internal node creation".into(),
@@ -3953,6 +3970,7 @@ fn local_service_supported(class: &str) -> bool {
             | "KeyframeSequenceProvider"
             | "TestService"
             | "Stats"
+            | "LocalizationService"
     )
 }
 
@@ -4684,6 +4702,12 @@ impl UserData for InstanceHandle {
                         return instance(lua, &ctx, &id);
                     }
                 }
+            }
+            // `game.Debris` and `game:GetService(...)` both resolve local
+            // client services; a direct member read must not look like a
+            // missing property.
+            if class == "DataModel" && local_service_supported(&key) {
+                return ensure_client_service(lua, &ctx, &key);
             }
             let getters = ctx.borrow().getters.get(&key).cloned().unwrap_or_default();
             for getter in getters {

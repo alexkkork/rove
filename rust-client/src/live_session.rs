@@ -1770,6 +1770,22 @@ pub fn run_with_options(
     if !(1..=3600).contains(&seconds) {
         return Err("session duration must be 1..3600 seconds".into());
     }
+    if std::env::var_os("ROVE_DUMP_JOIN").is_some() {
+        let mut keys: Vec<&String> = issued
+            .game_join_fields
+            .as_object()
+            .map(|o| o.keys().collect())
+            .unwrap_or_default();
+        keys.sort();
+        eprintln!("JOIN_KEYS {}", serde_json::json!(keys));
+        if let Some(obj) = issued.game_join_fields.as_object() {
+            for key in &keys {
+                let value = &obj[*key];
+                let text = value.to_string();
+                eprintln!("JOIN_FIELD {key} len={} {}", text.len(), text);
+            }
+        }
+    }
     let allocation = live_transport_allocation(issued)?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let trust = PublicTrust::from_files(

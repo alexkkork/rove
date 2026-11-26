@@ -454,7 +454,7 @@ pub struct IssuedJoinAllocation {
     pub tickets: SessionTicketMetadata,
     // Kept private and omitted from Debug. These exact fields belong to this
     // allocation; a live owner must not reconstruct them from another join.
-    game_join_fields: Value,
+    pub(crate) game_join_fields: Value,
     game_join_ticket: Option<Value>,
 }
 impl IssuedJoinAllocation {

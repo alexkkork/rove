@@ -1882,8 +1882,10 @@ fn gui_service_property(
             json!({"$enum":{"type":"DisplaySize","name":"Medium","value":1}})
         }
         "PreferredTransparency" => json!(0),
+        "MenuIsOpen" | "IsModalDialog" | "IsWindows" => Json::Bool(false),
         "IsModalDialog" | "IsWindows" => Json::Bool(false),
         "TouchControlsEnabled" => Json::Bool(false),
+        "MenuIsOpen" | "IsModalDialog" | "IsWindows" => Json::Bool(false),
         "AutoSelectGuiEnabled" | "GuiNavigationEnabled" => Json::Bool(false),
         "ReducedMotionEnabled" => Json::Bool(false),
         "MenuIsOpen" => Json::Bool(false),
@@ -1945,6 +1947,18 @@ fn gui_objects_at_position(
         array.set(index + 1, world::instance(lua, ctx, &child)?)?;
     }
     Ok(mlua::MultiValue::from_vec(vec![mlua::Value::Table(array)]))
+}
+
+fn gui_service_noop(
+    _lua: &mlua::Lua,
+    ctx: &WorldRef,
+    id: &str,
+    _args: mlua::MultiValue,
+) -> mlua::Result<mlua::MultiValue> {
+    if class(ctx, id) != "GuiService" {
+        return Err(err("GuiService receiver required"));
+    }
+    Ok(mlua::MultiValue::new())
 }
 
 fn is_ten_foot_interface(
@@ -2437,6 +2451,16 @@ pub fn install(lua: &mlua::Lua, ctx: &WorldRef) -> mlua::Result<()> {
     world::register_setter(ctx, "SelectionStart", set_selection_start);
     world::register_setter(ctx, "CanvasPosition", set_canvas_position);
     world::register_method(ctx, "GuiService", "GetGuiInset", get_gui_inset);
+    for name in [
+        "SetGameplayPausedNotificationEnabled",
+        "SetMenuIsOpen",
+        "SetEmotesMenuOpen",
+        "SetBadgeVisibility",
+        "SetTopbarTransparency",
+        "SetUiMode",
+    ] {
+        world::register_method(ctx, "GuiService", name, gui_service_noop);
+    }
     world::register_method(ctx, "PlayerGui", "GetGuiObjectsAtPosition", gui_objects_at_position);
     for key in [
         "TouchControlsEnabled",

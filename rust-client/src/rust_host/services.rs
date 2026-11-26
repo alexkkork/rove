@@ -864,6 +864,109 @@ pub(crate) fn local_mouse(lua: &Lua, ctx: &WorldRef, player: &str) -> mlua::Resu
     Ok(mouse_id)
 }
 
+/// `Players:GetUserThumbnailAsync` returns `(content, isReady)`. There is no
+/// CDN fetch here, so report a stable constructed URL and mark it ready.
+fn players_thumbnail(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    if ctx.borrow().nodes.get(id).map(|n| n.class_name.as_str()) != Some("Players") {
+        return Err(expected("Players", "GetUserThumbnailAsync"));
+    }
+    let values = collect_args(args);
+    let user_id = values
+        .first()
+        .and_then(|v| match v {
+            Value::Integer(n) => Some(*n),
+            Value::Number(n) if n.fract() == 0. => Some(*n as i64),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            mlua::Error::RuntimeError("GetUserThumbnailAsync expects a UserId integer".into())
+        })?;
+    let size = match values.get(2) {
+        Some(Value::UserData(item)) => {
+            super::enums::enum_item_name(item).unwrap_or_else(|_| "Size420x420".into())
+        }
+        _ => "Size420x420".to_owned(),
+    };
+    let dimensions = match size.as_str() {
+        "Size150x150" => "150x150",
+        "Size180x180" => "180x180",
+        "Size352x352" => "352x352",
+        _ => "420x420",
+    };
+    let url = format!(
+        "https://www.roblox.com/headshot-thumbnail/image?userId={user_id}&width={dimensions}&height={dimensions}&format=png"
+    );
+    Ok(MultiValue::from_vec(vec![
+        Value::String(lua.create_string(&url)?),
+        Value::Boolean(true),
+    ]))
+}
+
+/// LocalizationService + Translator. Without downloaded translations every
+/// Translate/FormatByKey passes the source text straight through, which is
+/// what the engine does when no localization table matches.
+fn localization_method(lua: &Lua, ctx: &WorldRef, id: &str, kind: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    let class = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .map(|n| n.class_name.clone())
+        .unwrap_or_default();
+    let values = collect_args(args);
+    let mut out = MultiValue::new();
+    match (class.as_str(), kind) {
+        ("LocalizationService", "GetTranslatorForPlayer" | "GetTranslatorForPlayerAsync") => {
+            let translator = world::create_internal_node(
+                lua,
+                ctx,
+                "Translator",
+                None,
+                serde_json::Map::from_iter([(
+                    "LocaleId".to_owned(),
+                    json!("en-us"),
+                )]),
+            )?;
+            out.push_back(translator);
+        }
+        ("LocalizationService", "GetCorescriptLocalizations") => {
+            out.push_back(Value::Table(lua.create_table()?));
+        }
+        ("LocalizationService", "GetTableEntries") => {
+            out.push_back(Value::Table(lua.create_table()?));
+        }
+        ("LocalizationService", "GetIsLoadingInternalTranslations") => {
+            out.push_back(Value::Boolean(false));
+        }
+        ("LocalizationService", "SetRobloxLocaleId" | "StartTextScraper") => {}
+        ("Translator", "Translate" | "FormatByKey") => {
+            if kind == "Translate" {
+                out.push_back(values.first().cloned().unwrap_or(Value::Nil));
+            } else {
+                // FormatByKey(key, args) returns the key when no table matches.
+                out.push_back(values.first().cloned().unwrap_or(Value::Nil));
+            }
+            out.push_back(values.first().cloned().unwrap_or(Value::Nil));
+        }
+        ("Translator", "RobloxOnlyTranslate") => {
+            out.push_back(Value::Boolean(false));
+        }
+        _ => return Err(expected(&class, kind)),
+    }
+    Ok(out)
+}
+
+macro_rules! localization_wrapper {
+    ($name:ident, $kind:literal) => {
+        fn $name(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+            localization_method(lua, ctx, id, $kind, args)
+        }
+    };
+}
+localization_wrapper!(loc_translator, "GetTranslatorForPlayer");
+localization_wrapper!(loc_translator_async, "GetTranslatorForPlayerAsync");
+localization_wrapper!(translator_translate, "Translate");
+localization_wrapper!(translator_format, "FormatByKey");
+
 fn http_method(
     lua: &Lua,
     ctx: &WorldRef,
@@ -1511,6 +1614,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         ("getPlayers", players_get_players_lower),
         ("players", players_players),
         ("GetPlayerByUserId", players_by_user_id),
+        ("GetUserThumbnailAsync", players_thumbnail),
         ("GetPlayerFromCharacter", players_from_character),
     ] {
         world::register_method(ctx, "Players", name, method);
@@ -1527,6 +1631,18 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         text_service_get_text_size,
     );
     world::register_method(ctx, "TestService", "Message", test_service_message);
+    for (name, method) in [
+        ("GetTranslatorForPlayer", loc_translator as world::Method),
+        ("GetTranslatorForPlayerAsync", loc_translator_async),
+    ] {
+        world::register_method(ctx, "LocalizationService", name, method);
+    }
+    for (name, method) in [
+        ("Translate", translator_translate as world::Method),
+        ("FormatByKey", translator_format),
+    ] {
+        world::register_method(ctx, "Translator", name, method);
+    }
     for (name, method) in [
         ("IsClient", run_is_client as world::Method),
         ("IsServer", run_is_server),

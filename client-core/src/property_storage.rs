@@ -139,7 +139,9 @@ mod paged {
     fn read_exact_at(file: &File, bytes: &mut [u8], offset: u64) -> io::Result<()> {
         file.read_exact_at(bytes, offset)
     }
-    const PAGE: usize = 64 * 1024;
+    // Smaller pages mean a cold read maps only the bytes it needs instead of
+    // pulling 64 KiB into the read cache at a time.
+    const PAGE: usize = 16 * 1024;
     const MAX_FILE: usize = 100 * 1024 * 1024;
     thread_local! { static CURRENT: RefCell<Weak<Store>> = const { RefCell::new(Weak::new()) }; }
     static STORES: OnceLock<Mutex<Vec<Weak<Store>>>> = OnceLock::new();
