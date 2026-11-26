@@ -2684,6 +2684,16 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
     if class == "InputBinding" {
         return input_binding_default(key);
     }
+    if class == "Player" {
+        return match key {
+            "Neutral" => Some(json!(true)),
+            "Team" | "ReplicationFocus" => Some(Json::Null),
+            "TeamColor" => Some(json!({"$brickcolor":194})),
+            "ReplicationFocus" => Some(Json::Null),
+            "HasVerifiedBadge" => Some(json!(false)),
+            _ => None,
+        };
+    }
     if class == "Stats" {
         return match key {
             "DataSendKbps" | "DataReceiveKbps" | "PhysicsSendKbps" | "PhysicsReceiveKbps" => {

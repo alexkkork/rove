@@ -116,6 +116,9 @@ mod input_actions_tests;
 #[path = "size_probe_tests.rs"]
 mod size_probe_tests;
 #[cfg(test)]
+#[path = "../asset_crypto_live_tests.rs"]
+mod asset_crypto_live_tests;
+#[cfg(test)]
 mod bindables_tests;
 #[cfg(test)]
 mod closures_tests;

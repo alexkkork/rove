@@ -512,6 +512,7 @@ impl Vm {
         let pending = std::mem::take(&mut self.deferred_receipts);
         let received_changes = pending.iter().chain(received_changes).collect::<Vec<_>>();
         let mut response = self.pump(budget, &received_changes)?;
+        response["far_nodes_pruned"] = json!(self.nodes_pruned);
         if op == "gui_action" {
             let world = self.world.borrow();
             response["textFocus"] = json!({"id":world.focused_textbox.as_deref().unwrap_or(""),"revision":world.focused_text_revision});
