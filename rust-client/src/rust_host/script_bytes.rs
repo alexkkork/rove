@@ -37,6 +37,10 @@ fn item_bytes(item: &Json, normalized: bool) -> mlua::Result<Vec<u8>> {
     }
     if let Some(source) = item["source"].as_str() {
         if source.len() > MAX_BYTES { return Err(error("script source exceeds limit")); }
+        // Received Source is often raw bytecode, not text.
+        if super::lifecycle::looks_like_bytecode(source.as_bytes()) {
+            return Ok(source.as_bytes().to_vec());
+        }
         return Compiler::new().set_debug_level(2).compile(source.as_bytes());
     }
     if !normalized && item.get("original_bytecode_hex").is_some() {

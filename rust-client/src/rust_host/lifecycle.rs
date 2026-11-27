@@ -407,6 +407,12 @@ fn source_item(lifecycle: &Lifecycle, ctx: &WorldRef, id: &str) -> Result<Json> 
         // A received Source property is the downloaded script text for this
         // node; use it whether or not the node is server-owned. Locally
         // created objects additionally expose their authored default.
+        if std::env::var_os("ROVE_SRC_TRACE").is_some() {
+            eprintln!("SRC id={id} origin={} props={:?} proj={:?}",
+                lifecycle.origins.contains_key(id),
+                node.properties.get("Source").map(|v| v.as_str().map(str::len)),
+                node.projected.as_ref().and_then(|p| p.property("Source").ok().flatten()).map(|v| v.as_str().map(str::len)));
+        }
         if !lifecycle.origins.contains_key(id) {
             // Source can live on the projected record for received scripts.
             let received_source = node
@@ -428,6 +434,30 @@ fn source_item(lifecycle: &Lifecycle, ctx: &WorldRef, id: &str) -> Result<Json> 
         }
     }
     if let Some(item) = lifecycle.builtin_sources.get(id).filter(|item| has_script_code(item)) {
+        return Ok(item.clone());
+    }
+    // Catalog keys are network ids (`1:...`); received nodes get a `local:`
+    // VM id, so map through the projected record before giving up.
+    let network_key = ctx
+        .borrow()
+        .nodes
+        .get(id)
+        .and_then(|n| n.projected.as_ref().map(|p| p.id().to_owned()));
+    if std::env::var_os("ROVE_SRC_TRACE").is_some() {
+        eprintln!(
+            "SRCKEY id={id} net={network_key:?} in_catalog={:?} has_code={:?}",
+            network_key.as_deref().map(|k| lifecycle.catalog.contains_key(k)),
+            network_key
+                .as_deref()
+                .and_then(|k| lifecycle.catalog.get(k))
+                .map(|i| has_script_code(i))
+        );
+    }
+    if let Some(item) = network_key
+        .as_deref()
+        .and_then(|key| lifecycle.catalog.get(key))
+        .filter(|item| has_script_code(item))
+    {
         return Ok(item.clone());
     }
     if let Some(item) = lifecycle.catalog.get(id).filter(|item| has_script_code(item)) {
@@ -475,7 +505,7 @@ pub(super) fn record_clone(lua: &Lua, source_id: &str, clone_id: &str) -> Result
 
 /// Received `Source` can be raw Luau bytecode rather than text; detect the
 /// chunk signature so it is loaded instead of fed to the text compiler.
-fn looks_like_bytecode(bytes: &[u8]) -> bool {
+pub(super) fn looks_like_bytecode(bytes: &[u8]) -> bool {
     bytes.len() > 4 && (4..=14).contains(&bytes[0]) && bytes[1] <= 3
 }
 
@@ -1668,6 +1698,9 @@ pub fn update_sources(lua: &Lua, delta: &Json) -> Result<()> {
         .app_data_ref::<Rc<RefCell<Lifecycle>>>()
         .ok_or_else(|| err("script lifecycle is not installed"))?
         .clone();
+    if std::env::var_os("ROVE_SRC_TRACE").is_some() {
+        eprintln!("CATALOG {} entries sample={:?}", catalog.len(), catalog.keys().take(3).collect::<Vec<_>>());
+    }
     state.borrow_mut().catalog = catalog;
     Ok(())
 }
