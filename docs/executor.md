@@ -181,9 +181,14 @@ Results: MM2 35k nodes / 77 MB / 0 errors; Adopt Me 43k nodes / ~1 error
 All 929 client + 223 core tests green.
 
 Build note: the Homebrew rustc/cmake are x86_64 and crash under Rosetta with
-"unable to load libxcrun". Use `./bin/cargo` (pins the native arm64 toolchain
-and cmake). The pinned Tovek decompiler binary is checked in, so `decompile()`
-works.
+"unable to load libxcrun". Use `./bin/cargo`, which pins the native arm64
+toolchain, cmake and the SDK sysroot:
+
+```
+./bin/cargo build --release --bin rove --manifest-path rust-client/Cargo.toml --target-dir rust-client/target-arm
+```
+
+The pinned Tovek decompiler binary is checked in, so `decompile()` works.
 
 ## memory work (follow-up)
 
