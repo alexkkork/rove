@@ -2723,6 +2723,15 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
             _ => None,
         };
     }
+    if class == "Humanoid" {
+        return match key {
+            "FloorMaterial" => {
+                Some(json!({"$enum":{"type":"Material","name":"Plastic","value":256}}))
+            }
+            "MoveDirection" => Some(json!({"$vector3":[0,0,0]})),
+            _ => None,
+        };
+    }
     if class == "Stats" {
         return match key {
             "DataSendKbps" | "DataReceiveKbps" | "PhysicsSendKbps" | "PhysicsReceiveKbps" => {

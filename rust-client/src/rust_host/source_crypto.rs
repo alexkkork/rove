@@ -383,16 +383,16 @@ pub(super) fn install(
             .as_secs_f64();
         Ok(seconds)
     })?;
-    globals.set("tick", now.clone())?;
-    // `time()` is tick() minus the VM process start, as in the engine.
+    globals.set("tick", now)?;
+    // `time()` is seconds since the VM started, unlike epoch-based `tick()`.
+    // It must be monotonic and start near zero for interval comparisons.
+    let started = std::time::Instant::now();
+    let lua_state = lua.state();
     globals.set(
         "time",
         lua.create_function(move |_, ()| {
-            let seconds = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(mlua::Error::external)?
-                .as_secs_f64();
-            Ok(seconds)
+            let _ = lua_state;
+            Ok(started.elapsed().as_secs_f64())
         })?,
     )?;
     globals.set(
