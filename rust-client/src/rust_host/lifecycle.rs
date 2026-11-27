@@ -404,16 +404,26 @@ fn source_item(lifecycle: &Lifecycle, ctx: &WorldRef, id: &str) -> Result<Json> 
         if let Some(source) = node.local_overrides.get("Source").and_then(Json::as_str) {
             return Ok(json!({"source":source,"authored_override":true}));
         }
-        // A source field on an imported server-owned node is not source
-        // admission. Only locally-created objects may use their local default.
-        if !node.server_owned && !lifecycle.origins.contains_key(id) {
-            if let Some(source) = node
+        // A received Source property is the downloaded script text for this
+        // node; use it whether or not the node is server-owned. Locally
+        // created objects additionally expose their authored default.
+        if !lifecycle.origins.contains_key(id) {
+            // Source can live on the projected record for received scripts.
+            let received_source = node
+                .projected
+                .as_ref()
+                .and_then(|p| p.property("Source").ok().flatten())
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .filter(|source| !source.is_empty());
+            let source = node
                 .properties
                 .get("Source")
                 .and_then(Json::as_str)
                 .filter(|source| !source.is_empty())
-            {
-                return Ok(json!({"source":source,"authored_override":true}));
+                .map(str::to_owned)
+                .or(received_source);
+            if let Some(source) = source {
+                return Ok(json!({"source":source}));
             }
         }
     }
@@ -463,8 +473,17 @@ pub(super) fn record_clone(lua: &Lua, source_id: &str, clone_id: &str) -> Result
     Ok(())
 }
 
+/// Received `Source` can be raw Luau bytecode rather than text; detect the
+/// chunk signature so it is loaded instead of fed to the text compiler.
+fn looks_like_bytecode(bytes: &[u8]) -> bool {
+    bytes.len() > 4 && (4..=14).contains(&bytes[0]) && bytes[1] <= 3
+}
+
 fn compile_item(lua: &Lua, name: &str, item: &Json) -> Result<Function> {
     if let Some(source) = item.get("source").and_then(Json::as_str) {
+        if item.get("bytecode_provenance").is_none() && looks_like_bytecode(source.as_bytes()) {
+            return super::integrity::load_bytecode(lua, name, &[], source.as_bytes());
+        }
         if item.get("bytecode_provenance").is_some() {
             validate_builtin_entry(item)?;
             let bytes = hex_decode(

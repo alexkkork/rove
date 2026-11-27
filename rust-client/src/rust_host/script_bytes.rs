@@ -130,7 +130,8 @@ mod tests {
             script.Source='return 43'
             assert(getscriptbytecode(script)~=before and getscripthash(script)~=hash)
             assert(not pcall(getscriptbytecode,game))
-            assert(getscriptbytecode(game.Unavailable)==nil)
+            -- A received Source is usable even on a server-owned node.
+            assert(getscriptbytecode(game.Unavailable)~=nil)
             assert(getscriptbytecode(Instance.new('LocalScript'))==nil)
             local ok, fn, message=pcall(loadstring,before)
             assert(ok and fn==nil and type(message)=='string')
