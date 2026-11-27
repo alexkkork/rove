@@ -602,6 +602,9 @@ impl Vm {
         // gameplay bubble while still releasing the bulk of a large map.
         const KEEP_RADIUS: f64 = 384.;
         const PER_CALL: usize = 2048;
+        if std::env::var_os("ROVE_NO_PRUNE").is_some() {
+            return;
+        }
         let now = Instant::now();
         if now.duration_since(self.last_prune) < Duration::from_millis(250) {
             return;
