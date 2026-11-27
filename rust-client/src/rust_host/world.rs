@@ -2537,6 +2537,12 @@ pub(crate) fn get_property_from_world(world: &World, id: &str, key: &str) -> mlu
     }
     if let Some(projected) = &node.projected {
         let received = projected.property(key).map_err(mlua::Error::RuntimeError)?;
+        // A replicated `Value` that decoded as null (attribute holder written
+        // before its value arrived) must still answer the typed empty value,
+        // otherwise `holder.Value.X` indexes nil.
+        let received = received.filter(|value| {
+            !value.is_null() || value_object_default(&node.class_name, key).is_none()
+        });
         if let Some(value) = received {
             // Wire enums are bare integers; scripts index `.Name`/`.Value`.
             if let Some(number) = value.as_i64() {
@@ -2741,6 +2747,19 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
             "Genre" => Some(json!({"$enum":{"type":"Genre","name":"All","value":1}})),
             _ => None,
         };
+    }
+    // BaseParts created by a game (force-field proxies, hit boxes) can be read
+    // before their Size/CFrame replicate. Answer the Part defaults so
+    // `part.Size.Magnitude` and `.Position` never index nil.
+    if class_chain(class).iter().any(|c| c == "BasePart") {
+        match key {
+            "Size" => return Some(json!({"$vector3":[4, 1, 2]})),
+            "Position" => return Some(json!({"$vector3":[0, 0, 0]})),
+            "CFrame" => {
+                return Some(json!({"$cframe":{"position":[0,0,0],"rotation":[1,0,0,0,1,0,0,0,1]}}))
+            }
+            _ => {}
+        }
     }
     if class == "Terrain" {
         return match key {

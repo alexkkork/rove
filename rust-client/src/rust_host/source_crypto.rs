@@ -383,7 +383,18 @@ pub(super) fn install(
             .as_secs_f64();
         Ok(seconds)
     })?;
-    globals.set("tick", now)?;
+    globals.set("tick", now.clone())?;
+    // `time()` is tick() minus the VM process start, as in the engine.
+    globals.set(
+        "time",
+        lua.create_function(move |_, ()| {
+            let seconds = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(mlua::Error::external)?
+                .as_secs_f64();
+            Ok(seconds)
+        })?,
+    )?;
     globals.set(
         "collectgarbage",
         lua.create_function(|lua, option: String| {

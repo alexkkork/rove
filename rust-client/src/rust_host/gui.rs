@@ -425,11 +425,12 @@ fn local_player(ctx: &WorldRef) -> Option<String> {
         .and_then(Json::as_str)
         .map(ToOwned::to_owned)
 }
+/// Class of a node without expanding a lazy shared record.
 fn class(ctx: &WorldRef, id: &str) -> String {
     ctx.borrow()
         .nodes
-        .get(id)
-        .map(|n| n.class_name.clone())
+        .class_name(id)
+        .map(str::to_owned)
         .unwrap_or_default()
 }
 fn component(ctx: &WorldRef, id: &str, wanted: &str) -> Option<String> {
@@ -2649,7 +2650,10 @@ fn absolute_value(
     key: &str,
 ) -> mlua::Result<Option<mlua::Value>> {
     let mut cache = HashMap::new();
-    let b = box_for(ctx, id, &display(ctx), &mut cache, &mut HashSet::new(), 0).map_err(err)?;
+    // Layout can be unresolvable before a ScreenGui is parented (the engine
+    // reports zero rather than throwing), so fall back to an empty box.
+    let b = box_for(ctx, id, &display(ctx), &mut cache, &mut HashSet::new(), 0)
+        .unwrap_or_default();
     let value = match key {
         "AbsoluteSize" => json!({"$vector2":[b.w,b.h]}),
         "AbsolutePosition" => json!({"$vector2":[b.x,b.y]}),

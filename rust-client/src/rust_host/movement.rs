@@ -911,13 +911,13 @@ pub fn apply_engine_poses_with_lua(lua: &Lua, ctx: &WorldRef, batch: &Json) -> m
 }
 fn is_descendant_by_parent(ctx: &WorldRef, id: &str, ancestor: &str) -> bool {
     let world = ctx.borrow();
-    let mut current = world.nodes.get(id).and_then(|n| n.parent.clone());
+    let mut current = world.nodes.live_parent(id);
     let mut hops = 0;
     while let Some(value) = current {
         if value == ancestor {
             return true;
         }
-        current = world.nodes.get(&value).and_then(|n| n.parent.clone());
+        current = world.nodes.live_parent(&value);
         hops += 1;
         if hops > 100_000 {
             return false;
