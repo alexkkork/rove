@@ -1702,7 +1702,10 @@ pub(crate) fn sync_attribute_child(
     };
     let mut encoded = match value.get("$instance_handle").and_then(Json::as_str) {
         Some(target) => json!({"$ref":target}),
-        None => value.clone(),
+        None => match value.get("$vector2").and_then(Json::as_array) {
+            Some(xy) if xy.len() == 2 => json!({"$vector3":[xy[0], xy[1], 0]}),
+            _ => value.clone(),
+        },
     };
     // A null attribute still owns a holder; the holder keeps its typed empty
     // value so `.X` style reads never see nil.
@@ -2700,9 +2703,6 @@ fn client_omitted_default(class: &str, key: &str, complete: bool, local: bool) -
     // InputBinding is client-built by PlayerModule; replicated copies omit
     // most defaults (scale vectors, thresholds, enum directions).
     if class == "InputBinding" {
-        if std::env::var_os("ROVE_ENUM_TRACE").is_some() {
-            eprintln!("IB_DEFAULT {key}");
-        }
         return input_binding_default(key);
     }
     if class == "Player" {

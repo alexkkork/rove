@@ -864,6 +864,13 @@ impl UserData for EnumItem {
         fields.add_field_method_get("Name", |_, this| Ok(this.name.clone()));
         fields.add_field_method_get("Value", |_, this| Ok(this.value));
         fields.add_field_method_get("EnumType", |lua, this| enum_type(lua, &this.enum_name));
+        // `KeyCode` on a KeyCode EnumItem is the item itself.
+        fields.add_field_method_get("KeyCode", |lua, this| {
+            if this.enum_name != "KeyCode" {
+                return Ok(Value::Nil);
+            }
+            Ok(Value::UserData(enum_item(lua, "KeyCode", &this.name)?))
+        });
     }
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {

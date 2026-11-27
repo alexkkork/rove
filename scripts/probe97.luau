@@ -1,10 +1,16 @@
-local ls = game:GetService("LocalizationService")
-local out = {"cls="..ls.ClassName}
-out[#out+1] = "fn="..tostring(ls.GetTranslatorForPlayer)
-local ok, tr = pcall(function() return ls:GetTranslatorForPlayer(game:GetService("Players").LocalPlayer) end)
-out[#out+1] = "call="..tostring(ok).." "..tostring(tr)
-if ok and tr then
-  out[#out+1] = "trcls="..tr.ClassName
-  out[#out+1] = "tr="..tostring(tr:Translate("hello"))
+task.wait(6)
+local bad = {}
+for _, d in ipairs(workspace:GetDescendants()) do
+  if d:IsA("BasePart") then
+    local ok, kids = pcall(function() return d:GetChildren() end)
+    if ok then
+      for _, c in ipairs(kids) do
+        if c.Name:sub(1,10) == "$Attribute" then
+          local ok2, v = pcall(function() return c.Value end)
+          if not ok2 then bad[#bad+1] = c:GetFullName().." "..tostring(v):sub(1,70) end
+        end
+      end
+    end
+  end
 end
-return table.concat(out, "\n")
+return "bad="..#bad.."\n"..table.concat(bad, "\n")

@@ -1,12 +1,10 @@
-local m = require(game:GetService("ReplicatedStorage").BrickBattle.Attributes)
-local p = Instance.new("Part")
-m.setAttribute(p, "Test", Vector3.new(1,2,3))
-local c = p:FindFirstChild("$AttributeTest")
-local out = {"child="..tostring(c)}
-if c then
-  out[#out+1] = "cls="..c.ClassName
-  local r = table.pack(pcall(function() return c.Value end))
-  out[#out+1] = "read="..tostring(r[1]).." "..typeof(r[2])..":"..tostring(r[2])
-  out[#out+1] = "props="..table.concat((function() local t={} for k in pairs(c:GetAttributes()) do t[#t+1]=k end return t end)(), ",")
+task.wait(5)
+local mod = require(game:GetService("ReplicatedStorage").BrickBattle.Attributes)
+local bad, names = 0, {}
+for _, d in ipairs(workspace:GetDescendants()) do
+  if d:IsA("BasePart") then
+    local ok = pcall(function() return mod.getAttribute(d, "IsLunging") end)
+    if not ok then bad += 1; if #names < 4 then names[#names+1] = d:GetFullName() end end
+  end
 end
-return table.concat(out, "\n")
+return "bad="..bad.." "..table.concat(names, " | ")

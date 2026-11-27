@@ -208,14 +208,16 @@ impl NodeEntry {
         // Plain snapshots keep properties inline (no projected record), so the
         // pristine check below still applies; only the stored copy differs.
         let projected = node.projected.clone();
-        // `node.take()` discards the wrapper's own property map, so every
-        // property it holds must also live in the shared record.
-        let properties_safe = node
-            .properties
-            .iter()
-            .all(|(key, value)| projected.as_ref().is_some_and(|p| {
-                p.property(key).ok().flatten().is_some_and(|shared| shared == *value)
-            }));
+        // `node.take()` discards the wrapper's own property map, so each one
+        // must be identical in the shared record.
+        let properties_safe = node.properties.iter().all(|(key, value)| {
+            projected.as_ref().is_some_and(|p| {
+                p.property(key)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|shared| shared == *value)
+            })
+        });
         if !node.attributes_known
             || !properties_safe
             || node.destroyed
