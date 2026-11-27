@@ -4,4 +4,10 @@
 set -euo pipefail
 export RUSTC="${RUSTC:-$HOME/.cargo/bin/rustc}"
 export CMAKE="${CMAKE:-/opt/homebrew/bin/cmake}"
+# The installed libxcrun.dylib has no x86_64 slice, so point clang/ld at the
+# SDK directly instead of letting them call xcrun.
+SDK="$(xcode-select -p 2>/dev/null || true)/SDKs/MacOSX.sdk"
+[ -d "$SDK" ] || SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+export SDKROOT="$SDK"
+export CFLAGS="${CFLAGS:-} -isysroot $SDK"
 exec "${CARGO:-$HOME/.cargo/bin/cargo}" "$@"
