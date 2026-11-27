@@ -184,3 +184,30 @@ Build note: the Homebrew rustc/cmake are x86_64 and crash under Rosetta with
 "unable to load libxcrun". Use `./bin/cargo` (pins the native arm64 toolchain
 and cmake). The pinned Tovek decompiler binary is checked in, so `decompile()`
 works.
+
+## memory work (follow-up)
+
+Live peak RSS on Crossroads fell from ~141 MB to ~75-95 MB with the same
+behaviour, and steady state sits at 20-30 MB. What changed, in order of
+payoff:
+
+- Release builds compile natively for arm64 (see the build note above). This
+  alone accounted for the largest single drop.
+- `property_revisions` is `HashMap<String, u64>` instead of a JSON map: 8 B per
+  property instead of a boxed number plus ~184 B of map overhead.
+- Property storage pages are 16 KiB instead of 64 KiB, so a cold read maps only
+  what it asks for.
+- Far pristine parts are pruned back to their shared record every 250 ms
+  (384-stud radius, 2048-node budget, measured from the character). A wrapper
+  only goes away when every property it holds is byte-identical in the record,
+  its attribute map is known and empty, and it is a plain `Part`; otherwise it
+  stays. `nodes.class_name`/`live_parent` avoid materializing ancestors, so
+  written-position lookups no longer expand the whole chain.
+- `GetAttribute` also reads the shared record and the `$Attribute` holder, and
+  an unknown attribute map answers nil like the engine. Vector2 attributes are
+  exposed as a `Vector3Value` with `z = 0`, which is what Roblox's own
+  GridPosition reader expects.
+
+Not done yet, in rough payoff order: typed property columns instead of
+`serde_json::Value`, streaming window driven by the server's own highlight
+sets, and interning class/name strings.
